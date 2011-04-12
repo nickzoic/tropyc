@@ -43,29 +43,57 @@ class Stack:
     def dup(self, n=1):
         self.stack[0:0] = self.stack[0:n]
 
+# This list is from https://developer.mozilla.org/en/JavaScript/Reference/Reserved_Words
+# XXX add in words from http://docstore.mik.ua/orelly/webprog/jscript/ch02_08.htm
+# XXX are there any others needed to avoid upsetting the browser?
+
+ReservedWords = set(
+    "break case catch class const continue debugger default delete do else enum export extends \
+    false finally for function if implements import in instanceof interface let new null package private \
+    protected public return static super switch this throw true try typeof var void while with yield".split()
+)
+
+def name_mangle(name):
+    """Mangle identifiers to avoid collision with JavaScript reserved words."""
+    if name.startswith("_[") and name.endswith("]"): return "_q" + name[2:-1]
+    if name.startswith("_"): return "_" + name
+    if lc(name) in ReservedWords:
+        return "_r" + name
+    return name
 
 
 
-class CodeTransformer:
-
+class CodeNode:
+    
     def __init__(self, code_obj):
         self.code_obj = code_obj
-        self.stack = Stack()
-	
-	# XXX also need to protect reserved words
-	self.varnames = [
-	    "_f%s" % varname[2:-1] if varname.startswith("_[") else varname
-	    for varname in code_obj.co_varnames
-	]
+        self.stack = Stack()          # The 'expression stack'
+        self.blocks = []              # The 'block stack'
+        
+        self.varnames = [ name_mangle(varname) for varname in code_obj.co_varnames ]
 
-	# XXX this may also include code objects which json can't serialize.
-	# hey, that's what we're doing anyway!
-	self.consts = [
-	    json.dumps(c) for c in code_obj.co_consts
-	]
-	
+        # XXX this may also include code objects which json can't serialize.
+        # hey, that's what we're doing anyway!
+        self.consts = [
+            json.dumps(c) for c in code_obj.co_consts
+        ]
+        
+        self.code_nodes = [ None ] * len(code_obj.co_code)
+        
+        # XXX for the moment, we can leave these as they are just optimizations
+        if op_name.startswith("inplace_"):
+            op_name = op_name.replace("inplace_", "binary_")
+
+        if hasattr(self, op_name):
+            if op_arg is not None:
+                getattr(self, op_name)(op_arg)
+            else:
+                getattr(self, op_name)()
+        else:
+            print "Unknown Opcode %s" % op_name
+
     def emit(self, code):
-        print "\t%s;" % code
+        print code
 
     def unary_op(self, operator, pre="(", post=")"):
         a = self.stack.pop()
@@ -78,7 +106,7 @@ class CodeTransformer:
     def save_stack(self):
         # XXX hopefully not necessary, def. not optimal!
         for n, e in enumerate(self.stack):
-            self.emit("var _s%d = %s" % (n, e))
+            self.emit("var _s%d = %s;" % (n, e))
         nn = len(self.stack)
         self.stack = ["_s%d" % n for n in range(0,nn)]
 
@@ -195,33 +223,33 @@ class CodeTransformer:
 
     def print_item(self):
         tos = self.stack.pop()
-        self.emit("console.log(%s)" % tos)
+        self.emit("console.log(%s);" % tos)
 
     def print_newline(self):
-        self.emit("console.log('-----')")
+        self.emit("console.log('-----');")
 
     def return_value(self):
         tos = self.stack.pop()
-        self.emit("return %s" % tos)
+        self.emit("return %s;" % tos)
 
     def store_name(self, n):
-        self.emit("%s = %s" % (self.code_obj.co_names[n], self.stack.pop()))
+        self.emit("%s = %s;" % (self.code_obj.co_names[n], self.stack.pop()))
 
     def delete_name(self, n):
-        self.emit("delete %s" % self.code_obj.co_names[n])
+        self.emit("delete %s;" % self.code_obj.co_names[n])
 
     def dup_topx(self, n):
         # XXX should do something cleverer like dup_top?
         self.stack.dup(n)
 
     def load_const(self, n):
-	self.stack.push(self.consts[n])
+        self.stack.push(self.consts[n])
 
     def load_name(self, n):
         self.stack.push(self.code_obj.co_names[n])
 
     load_global = load_name
-    
+
     def build_tuple(self, n):
         ll = self.stack.popn(n)
         self.stack.push("[" + ",".join(ll) + "]")
@@ -240,7 +268,7 @@ class CodeTransformer:
         else:
             # XXX does this ever happen?
             self.stack.push(m)
-            self.emit("%s[%s] = %s" % (m,k,v))
+            self.emit("%s[%s] = %s;" % (m,k,v))
 
     def compare_op(self, n):
         # XXX missing a couple of cases
@@ -257,27 +285,27 @@ class CodeTransformer:
             self.binary_op(op)
 
     def jump_forward(self, n):
-        self.emit("XXX goto %d" % n)
+        self.emit("XXX goto %d;" % n)
 
     def jump_if_true(self, n):
         tos = self.stack.peek()
-        self.emit("XXX if %s goto %d" % (tos, n))
+        self.emit("XXX if %s goto %d;" % (tos, n))
 
     def jump_if_false(self, n):
         tos = self.stack.peek()
-        self.emit("XXX if (!%s) goto %d" % (tos, n))
+        self.emit("XXX if (!%s) goto %d;" % (tos, n))
 
     def jump_absolute(self, n):
-        self.emit("XXX goabs %d" % n)
+        self.emit("XXX goabs %d;" % n)
 
     def load_fast(self, n):
-	self.stack.push(self.varnames[n])
+        self.stack.push(self.varnames[n])
 
     def store_fast(self, n):
-        self.emit("%s = %s" % (self.varnames[n], self.stack.pop()))
+        self.emit("%s = %s;" % (self.varnames[n], self.stack.pop()))
 
     def delete_fast(self, n):
-        self.emit("delete %s" % self.varnames[n]);
+        self.emit("delete %s;" % self.varnames[n]);
 
     def call_function(self, n):
         # XXX key params aren't part of javascript ... how to handle them?
@@ -295,11 +323,11 @@ class CodeTransformer:
         # XXX it would be great to optimize void functions away
         # instead of temp variabling them
         temp = self.make_temp()
-        self.emit("var %s = %s(%s%s)" % (temp, func, key_params_str, pos_params_str))
+        self.emit("var %s = %s(%s%s);" % (temp, func, key_params_str, pos_params_str))
         self.stack.push(temp)
 
     def list_append(self):
-        self.emit("%s.append(%s)" % self.stack.pop2())
+        self.emit("%s.append(%s);" % self.stack.pop2())
 
     def load_attr(self, n):
         tos = self.stack.pop()
@@ -307,24 +335,37 @@ class CodeTransformer:
 
     def store_attr(self, n):
         tos, tos1 = self.stack.pop2()
-        self.emit("%s.%s = %s" % (tos, self.code_obj.co_names[n], tos1))
-    
+        self.emit("%s.%s = %s;" % (tos, self.code_obj.co_names[n], tos1))
+
     def delete_attr(self, n):
         tos = self.stack.pop()
-        self.emit("delete %s.%s" % (tos, self.code_obj.co_names[n]))
-    
+        self.emit("delete %s.%s;" % (tos, self.code_obj.co_names[n]))
+
     def unpack_sequence(self, n):
-	# XXX Do we actually need the temp vars?  Probably not.
-	tos = self.stack.pop()
-	for i in reversed(range(0,n)):
-	    temp = self.make_temp()
-	    self.emit("var %s = %s[%d]" % (temp, tos, i))
-	    self.stack.push(temp)
-	    
+        # XXX Do we actually need the temp vars?  Probably not.
+        tos = self.stack.pop()
+        for i in reversed(range(0,n)):
+            temp = self.make_temp()
+            self.emit("var %s = %s[%d];" % (temp, tos, i))
+            self.stack.push(temp)
+
+    def setup_loop(self, n):
+        self.blocks.append(self.make_temp())
+    
+    def for_iter(self, n):
+        self.emit("%s: while (1) {" % self.blocks[0])
+        
+    def pop_block(self, n):
+        self.emit("}")
+        self.blocks.pop()
+        
     #-----
+    
 
     def despatch(self, op, op_arg=None):
         op_name = opcode.opname[op].lower().replace('+', '_')
+        
+        # XXX for the moment, we can leave these as they are just optimizations
         if op_name.startswith("inplace_"):
             op_name = op_name.replace("inplace_", "binary_")
 
@@ -336,8 +377,23 @@ class CodeTransformer:
         else:
             print "Unknown Opcode %s" % op_name
 
-    def analyse(self):
-        '''Make a first pass through the code and split out the instructions'''
+
+class CodeObject:
+    
+    def __init__(self, code_obj):
+        self.code_obj = code_obj
+        
+        self.stack = Stack()          # The 'expression stack'
+        self.blocks = []              # The 'block stack'
+        
+        self.varnames = [ name_mangle(varname) for varname in code_obj.co_varnames ]
+
+        # XXX this may also include code objects which json can't serialize.
+        # hey, that's what we're doing anyway!
+        self.consts = [ json.dumps(c) for c in code_obj.co_consts ]
+        
+        self.code_nodes = [ None ] * len(code_obj.co_code)
+        
         code = self.code_obj.co_code
         cur_code = 0
         extended_arg = 0
@@ -361,24 +417,33 @@ class CodeTransformer:
             else:
                 self.ops[cur_code] = (op, None)
                 cur_code += 1
-	    
-	    self.despatch(op, op_arg)
+
+            self.codenodes[cur_code] = CodeNode(op, op_arg)
+            
+        for offset, codenode in enumerate(self.codenodes):
+            if codenode is None: continue
+            codenode.work(self.codenodes, offset)
+            
+            self.despatch(op, op_arg)
 
     def header(self):
-	print "function %s (%s) {\n\t/* %s:%s */" % (
-	    self.code_obj.co_name,
-	    ",".join(self.varnames[0:self.code_obj.co_argcount]),
-	    self.code_obj.co_filename,
-	    self.code_obj.co_firstlineno,
-	)
-	
-	for varname in self.varnames[self.code_obj.co_argcount:]:
-	    print "\tvar %s;" % varname
-	    
+        print "function %s (%s) {\n\t/* %s:%s */" % (
+            self.code_obj.co_name,
+            ",".join(self.varnames[0:self.code_obj.co_argcount]),
+            self.code_obj.co_filename,
+            self.code_obj.co_firstlineno,
+        )
+
+        for varname in self.varnames[self.code_obj.co_argcount:]:
+            print "\tvar %s;" % varname
+
     def footer(self):
-	print "}"
-    
-            
+        print "}"
+
+
+        
+
+        
 def foo(x,y):
     a, b, c, d = range(0,4)
     return a, b
