@@ -1,0 +1,74 @@
+=======================
+ Python in the Browser 
+=======================
+
+Netspace shipped the first Javascript interpreter in 1995[1] and its
+position in the web browser has made it almost universal.
+But imagine, for the sake of the argument, if Python had got there first.
+
+The timing would have been close, with Python 1.2 out in 1995[2] too.
+And there's a lot of similarity between the languages: dynamic typing,
+first-class functions, eval() [3] ... it isn't hard to imagine a Python VM 
+running in the browser with access to a global "document" and "window" 
+object.
+
+
+XXX Node.js http://nodejs.org/
+
+XXX Pyjamas
+
+[1] http://en.wikipedia.org/wiki/Javascript
+[2] http://en.wikipedia.org/wiki/History_of_Python#Version_1.0
+[3] ... not to mention somewhat bizarre treatment of whitespace.
+
+
+The RPC Problem
+===============
+
+Whenever two pieces of unconnected code communicate, the way they communicate
+has to be agreed upon, and the two parts must stay in sync or communication 
+fails.  One way to do this is to define a protocol describing the communication
+between them, but this generally just means you now have three parts to keep in
+sync.  XXX Machine-readable descriptions like XML Schema and WSDL.
+
+Wouldn't it be nice to just declare this stuff?
+
+    @runs_on_the_client
+    def handle_login(form):
+        user = get_user(form.username, form.password)
+
+    @runs_on_the_server
+    def get_user(username, password)
+        return db.tables['user'].select(username=username, password=password)
+
+The python compiler can see that a function which runs_on_the_client is calling a
+function which runs_on_the_server, and can go away and create some kind of RPC
+interface for us without bothering us with the details.
+
+Validation
+==========
+
+It is pretty common that you want to validate a form field on the frontend, to
+save a whole lot of round-trips, and also on the back-end, because the frontend can't 
+be trusted.  This isn't hard to do if your validation step is just a regexp ... but
+not all validation steps are.  Write that funtction once!
+
+    @runs_on_both
+    def validate_number(n):
+        return n % 13 != 0
+        
+    @runs_on_the_client
+    def submit_form(form):
+        if validate_number(form.number):
+            favorite_number(form.number)
+        else:
+            alert("Unlucky Number Chosen!")
+    
+    @runs_on_the_server
+    def favorite_number(number):
+        if validate_number(number):
+            remember(number)
+        else:
+            raise HttpForbidden("Unlucky!")
+
+        
