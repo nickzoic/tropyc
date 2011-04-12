@@ -1,5 +1,12 @@
 """An improved Python byte code disassembler."""
 
+# XXX modify this so that each instruction gets its own object and stack frame: as we go around a loop 
+# the stack frames should hopefully line up.
+
+# XXX javascript looping construct most likely is probably 
+# while(1) { if (exitcondition) break; if (loopcondition) continue; break; }
+# but I have to identify the loops somehow.
+
 import sys
 import types
 import opcode
@@ -44,9 +51,21 @@ class CodeTransformer:
     def __init__(self, code_obj):
         self.code_obj = code_obj
         self.stack = Stack()
+	
+	# XXX also need to protect reserved words
+	self.varnames = [
+	    "_f%s" % varname[2:-1] if varname.startswith("_[") else varname
+	    for varname in code_obj.co_varnames
+	]
 
+	# XXX this may also include code objects which json can't serialize.
+	# hey, that's what we're doing anyway!
+	self.consts = [
+	    json.dumps(c) for c in code_obj.co_consts
+	]
+	
     def emit(self, code):
-        print "%s;" % code
+        print "\t%s;" % code
 
     def unary_op(self, operator, pre="(", post=")"):
         a = self.stack.pop()
@@ -196,13 +215,13 @@ class CodeTransformer:
         self.stack.dup(n)
 
     def load_const(self, n):
-        # XXX consts can include code objects for lambdas
-        # and nested functions
-        self.stack.push(json.dumps(self.code_obj.co_consts[n]))
+	self.stack.push(self.consts[n])
 
     def load_name(self, n):
         self.stack.push(self.code_obj.co_names[n])
 
+    load_global = load_name
+    
     def build_tuple(self, n):
         ll = self.stack.popn(n)
         self.stack.push("[" + ",".join(ll) + "]")
@@ -238,39 +257,27 @@ class CodeTransformer:
             self.binary_op(op)
 
     def jump_forward(self, n):
-        self.emit("goto %d" % n)
+        self.emit("XXX goto %d" % n)
 
     def jump_if_true(self, n):
         tos = self.stack.peek()
-        self.emit("if %s goto %d" % (tos, n))
+        self.emit("XXX if %s goto %d" % (tos, n))
 
     def jump_if_false(self, n):
         tos = self.stack.peek()
-        self.emit("if (!%s) goto %d" % (tos, n))
+        self.emit("XXX if (!%s) goto %d" % (tos, n))
 
     def jump_absolute(self, n):
-        self.emit("goabs %d" % n)
-
-    def load_global(self, n):
-        self.stack.push("%s" % self.code_obj.co_names[n])
+        self.emit("XXX goabs %d" % n)
 
     def load_fast(self, n):
-        varname = self.code_obj.co_varnames[n]
-        if varname.startswith("_["): varname = "_f%s" % varname[2:-1]
-        self.stack.push(varname)
+	self.stack.push(self.varnames[n])
 
     def store_fast(self, n):
-        varname = self.code_obj.co_varnames[n]
-        if varname.startswith("_["): varname = "_f%s" % varname[2:-1]
-        # XXX should only have 'var' on first use.  maybe just
-        # declare all these up front.
-        vardecl = "var " if n >= self.code_obj.co_argcount else ""
-        self.emit("%s%s = %s" % (vardecl, varname, self.stack.pop()))
+        self.emit("%s = %s" % (self.varnames[n], self.stack.pop()))
 
     def delete_fast(self, n):
-        varname = self.code_obj.co_varnames[n]
-        if varname.startswith("_["): varname = "_f%s" % varname[2:-1]
-        self.emit("delete %s" % varname);
+        self.emit("delete %s" % self.varnames[n]);
 
     def call_function(self, n):
         # XXX key params aren't part of javascript ... how to handle them?
@@ -305,7 +312,15 @@ class CodeTransformer:
     def delete_attr(self, n):
         tos = self.stack.pop()
         self.emit("delete %s.%s" % (tos, self.code_obj.co_names[n]))
-        
+    
+    def unpack_sequence(self, n):
+	# XXX Do we actually need the temp vars?  Probably not.
+	tos = self.stack.pop()
+	for i in reversed(range(0,n)):
+	    temp = self.make_temp()
+	    self.emit("var %s = %s[%d]" % (temp, tos, i))
+	    self.stack.push(temp)
+	    
     #-----
 
     def despatch(self, op, op_arg=None):
@@ -346,22 +361,33 @@ class CodeTransformer:
             else:
                 self.ops[cur_code] = (op, None)
                 cur_code += 1
+	    
+	    self.despatch(op, op_arg)
+
+    def header(self):
+	print "function %s (%s) {\n\t/* %s:%s */" % (
+	    self.code_obj.co_name,
+	    ",".join(self.varnames[0:self.code_obj.co_argcount]),
+	    self.code_obj.co_filename,
+	    self.code_obj.co_firstlineno,
+	)
+	
+	for varname in self.varnames[self.code_obj.co_argcount:]:
+	    print "\tvar %s;" % varname
+	    
+    def footer(self):
+	print "}"
+    
+            
+def foo(x,y):
+    a, b, c, d = range(0,4)
+    return a, b
 
 
-            self.despatch(op, op_arg)
 
-
-
-def bar(a):
-    return a * 2
-
-def foo(x):
-
-
-    return bar(x)
-
-
-print dis.dis(foo)
+dis.dis(foo)
 
 x = CodeTransformer(foo.func_code)
+x.header()
 x.analyse()
+x.footer()
