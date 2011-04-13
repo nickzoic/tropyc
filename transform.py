@@ -78,6 +78,15 @@ def name_mangle(name):
     return name
 
 
+
+_temp_var = 0
+def temp_var():
+    """Returns a unique(ish) name for a temporary variable."""
+    _temp_var += 1
+    return "_T%d" % _temp_var
+
+
+
 # Translate Opcode names to Javascript operators.
 # XXX Sure would be nice to include precedence here.
 
@@ -120,32 +129,29 @@ CompareOperatorFormats = {
     
     
 class CodeOp:
-    """Really just a container for the opcode"""
-    def __init__(self, codelump, offset, op_code, op_name, op_arg, etype, extra):
+    
+    """Container for the opcode, including logic to evaluate its effects on the stack."""
+
+    def __init__(self, codefunc, op_name, value):
+        """codefunc: the parent function block.
+        op_name: the name of this operator.
+        value: operator parameter, suitably decoded. 
+        """
         
-        self.codelump = codelump
-        self.offset = offset
-        self.op_code = op_code
+        self.codefunc = codefunc
         self.op_name = op_name
-        self.op_arg = op_arg
-        self.etype = etype
-        self.extra = extra
-        
-        if self.etype == 'const':
-            # XXX how about code objects, eh?
-            if self.extra is None: self.value = 'null'
-            else: self.value = repr(self.extra)
-        elif self.etype in ('name', 'global', 'local', 'free'):
-            self.value = name_mangle(self.extra)
+        self.value = value
             
         self.code = ""
+
+    def find_branches(self):
         
-    def tempvar(self, n=None):
-        # XXX would this be better as a generator or something?
-        if n is None: return "_T%d" % self.offset
-        else: return "_T%d_%s" % (self.offset, n)
-        
-    def decompile(self, stack):
+        if self.op_name.startswith('POP_JUMP_IF') or self.op_name.startswith('JUMP_IF'):
+            self.goto = [ codefunc.codeops[]
+        elif self.op_name.startswith('JUMP_'):
+            
+            
+    def run_stack(self, stack):
         
         # NOPs
         
@@ -171,7 +177,8 @@ class CodeOp:
             stack.push(CompareOperatorFormats[self.extra].format(tos, tos1))
         
         elif self.op_name == 'POP_TOP':   stack.pop()    
-        elif self.op_name == 'DUP_TOP':   stack.dup()
+        elif self.op_name == 'DUP_TOP':   stack.dup()             # XXX check this is okay.
+        elif self.op_name == 'DUP_TOPX':  stack.dup(self.value)   # XXX this too.
         elif self.op_name == 'ROT_TWO':   stack.rot(2)
         elif self.op_name == 'ROT_THREE': stack.rot(3)
         elif self.op_name == 'ROT_FOUR':  stack.rot(4)
@@ -182,7 +189,7 @@ class CodeOp:
         elif self.op_name == 'SLICE+3':   stack.push("%s.slice(%s,%s)" % stack.popn(3))
 
         elif self.op_name in ('BUILD_LIST', 'BUILD_TUPLE'): 
-            ll = stack.popn(self.op_arg)
+            ll = stack.popn(self.value)
             stack.push("[" + ",".join(ll) + "]")
             
         elif self.op_name == 'LOAD_ATTR':
@@ -200,6 +207,8 @@ class CodeOp:
             
         # ACTUALLY EMIT CODE!
         
+        elif self.op_name == 'PRINT_ITEM': self.code = "print(%s)" % stack.pop()
+        elif self.op_name == 'PRINT_NEWLINE': self.code = "print('-----')"
         elif self.op_name in ('STORE_NAME', 'STORE_FAST'): self.code = "%s = %s" % (self.value, stack.pop())
         elif self.op_name in ('DELETE_NAME', 'DELETE_FAST'): self.code = "delete %s" % self.value
         elif self.op_name == 'RETURN_VALUE': self.code = "return %s" % stack.pop()
@@ -212,15 +221,15 @@ class CodeOp:
         
         elif self.op_name == 'CALL_FUNCTION':
             # XXX we don't handle kwargs
-            kwargs = stack.popn(int(self.op_arg / 256) * 2)      
-            args = stack.popn(self.op_arg % 256)
+            kwargs = stack.popn(int(self.value / 256) * 2)      
+            args = stack.popn(self.value % 256)
             func = stack.pop()
             
             # XXX it would be nice to optimize away void functions (followed by POP_TOP).
             # XXX or functions immediately followed by a STORE.
             # XXX actually, maybe I do the opposite and only assign to a variable on DUP
             # XXX and emit on POP!
-            temp = self.tempvar()
+            temp = temp_var()
             self.code = "var %s = %s(%s)" % (temp, func, ",".join(args))
             stack.push(temp)
         
@@ -228,82 +237,66 @@ class CodeOp:
             # XXX Do we ever actually need the temp values?
             # XXX Or are they always used in expressions?
             tos = stack.pop()
-            for n in range(0, op_arg):
-                temp = self.tempvar(n)
+            for n in range(0, self.value):
+                temp = temp_var(n)
                 self.code += "var %s = %s[%d]" % (temp, tos, n)
                 stack.push(temp)
         
-        elif self.op_name == 'POP_JUMP_IF_TRUE':
-            tos = stack.pop()
-            self.code = "if (%s) break" % tos
+        elif self.op_name in ('JUMP_FORWARD', 'JUMP_ABSOLUTE'):
+            self.code = "goto %s" % self.value
             
-        elif self.op_name == 'POP_JUMP_IF_FALSE':
-            tos = stack.pop()
-            self.code = "if (!%s) break" % tos
-        
+        elif self.op_name == 'JUMP_IF_TRUE': self.code = "if (%s) goto %s" % (stack.peek(), self.value)
+        elif self.op_name == 'POP_JUMP_IF_TRUE': self.code = "if (%s) goto %s" % (stack.pop(), self.value)
+        elif self.op_name == 'JUMP_IF_FALSE': self.code = "if (!%s) goto %s" % (stack.peek(), self.value)
+        elif self.op_name == 'POP_JUMP_IF_FALSE': self.code = "if (!%s) goto %s" % (stack.pop(), self.value)
+            
         elif self.op_name == 'RAISE_VARARGS':
-            ll = stack.popn(self.op_arg)
+            ll = stack.popn(self.value)
             self.code = "raise (%s)" % ",".join(ll)
             
         else:
             print "UNKNOWN OP %s" % self.op_name
             
-class CodeLump:
-    """A CodeLump is a logical group of CodeOps.  The distinguishing feature is
-    that a CodeLump is stack-neutral, eg: the stack is in the same state exiting
-    the CodeLump as it was entering it.  The Python 2.7 compiler actually gives
-    away the location of each code lump through the co_lnotab structure, which
-    has one row for each CodeLump.  If this didn't exist we'd have to work it
-    out by watching the stack.  The nice thing about all this is that we DO NOT
-    want to reproduce a stack machine in the target language, rather we want to
-    roll the stack operations up into expressions."""
-    
-    def __init__(self, co, offset, length, line_no):
-        
-        self.codeops = [ CodeOp(self, *x) for x in disx.disassemble(co, offset, length) ]
-        
-        print "CODELUMP %d" % offset
-        self.stack = Stack()
-
-        stack = Stack()        
-        for codeop in self.codeops:
-            codeop.decompile(stack)
-            if codeop.code:
-                print "\t", codeop.code
-        assert(stack.is_empty())
-        
-def lnotab_gen(co):
-    offset = 0
-    line_no = co.co_firstlineno
-    
-    # XXX a bit clumsy
-    for ncode, nline in zip(
-        [ord(c) for c in co.co_lnotab[0::2]],
-        [ord(c) for c in co.co_lnotab[1::2]]
-    ):
-        if ncode:
-            yield offset, ncode, line_no
-            offset += ncode
-        line_no += nline
-    
-    if len(co.co_code) > offset:
-        yield offset, len(co.co_code) - offset, line_no
     
     
-class CodeObject:
+class CodeFunc:
     """Represents a function or lambda, converting it to code."""
     
     def __init__(self, code_obj):
     
-        self.lumps = [ CodeLump(code_obj, *x) for x in lnotab_gen(code_obj) ]
-                    
-
+        disassy = disx.disassemble(code_obj)
+        
+        self.codeobj = [ None ] * len(code_obj.co_code)
+        
+        # XXX don't forget other constant code objects, eh?
+        consts = [ repr(x) for x in code_obj.co_consts ]
+        
+        self.codeobjs = []
+        for offset, op_code, op_name, op_args, etype, extra in disassy:
+            if etype == 'const':
+                value = consts[op_args]
+            elif etype in ('name', 'global', 'local', 'free'):
+                value = repr(self.extra)
+            elif etype:
+                value = extra
+            else:
+                value = op_args
+            
+            self.codeobj[offset] = CodeOp(self, op_name, value)
+           
+    
+    
         
 def f(x):
+    if y > 0:
+        print "yay!"
     if x > 0: 
-        return x + 1
+        a = x + 1
+    elif x < 0:
+        a = x - 1
     else:
-        return 0
+        a = "FUCK!"
+    return a
 
-#pprint.pprint(disx.dis(f))
-CodeObject(disx.disassemble.func_code)
+pprint.pprint(disx.dis(f))
+CodeFunc(f.func_code)
