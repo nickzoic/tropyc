@@ -10,13 +10,14 @@
 import sys
 import disx
 import pprint
-import dis
+import re
 
-class Stack:
-    """A simple stack class specialized to handle the operations we need
-    in the virtual machine.  Might make more sense to turn the list the 
-    other way up if that's quicker, but python stack never gets very deep
-    anyway."""
+class State:
+    """Holds the changing state of the virtual machine as the CodeOps 
+    execute on it.  Provides simple stack operations plus any other 
+    state which is needed."""
+    # XXX Might make sense to turn the self.stack the other way up
+    # but the expression stack never gets very deep anyway.
     
     def __init__(self, copyfrom=[]):
         self.stack = copyfrom[:]
@@ -55,26 +56,43 @@ class Stack:
 # XXX are there any others needed to avoid upsetting the browser?
 # XXX or should I just mangle everything to $foo or something!
 
-ReservedWords = set(
-    "abstract arguments array boolean break byte case catch char \
-    class const continue date debugger decodeuri decodeuricomponent \
-    default delete do double else encodeuri enum error escape eval \
-    evalerror export extends false final finally float for function \
-    goto if implements import in infinity instanceof int interface \
-    isfinite isnan let long math nan native new null number object \
-    package parsefloat parseint private protected public rangeerror \
-    referenceerror regexp return short static string super switch \
-    synchronized syntaxerror this throw throws transient true try \
-    typeerror typeof undefined unescape urierror var void \
-    volatile while with yield".split()
-)
+ReservedWords = set('''
+    abstract arguments array boolean break byte case catch char
+    class const continue date debugger decodeuri decodeuricomponent
+    default delete do double else encodeuri enum error escape eval
+    evalerror export extends false final finally float for function
+    goto if implements import in infinity instanceof int interface
+    isfinite isnan let long math nan native new null number object
+    package parsefloat parseint private protected public rangeerror
+    referenceerror regexp return short static string super switch
+    synchronized syntaxerror this throw throws transient true try
+    typeerror typeof undefined unescape urierror var void
+    volatile while with yield
+'''.split())
+
+
+# XXX need something along these lines to restrict which JavaScript
+# globals are allowed through ... the compiler should barf on any 
+# other globals.
+
+AllowedGlobals = set('''
+    alert document false float int max min null str true window 
+'''.split())
+    
 
 def name_mangle(name):
     """Mangle identifiers to avoid collision with JavaScript reserved words."""
-    if name.startswith("_[") and name.endswith("]"): return "_q" + name[2:-1]
-    if name.startswith("_"): return "_" + name
+    # XXX could be a lot more neaterer
+    
+    # These "_[1]" identifiers are used in list comprehensions somehow.
+    if name.startswith("_[") and name.endswith("]"): return "_Q" + name[2:-1]
+
+    # We're reserving _[A-Z] so move anything already there out of the way. 
+    if re.match("_+[A-Z]", name): return "_" + name
+    
     if name.lower() in ReservedWords:
         return "_R" + name
+    
     return name
 
 
@@ -82,6 +100,7 @@ def name_mangle(name):
 _temp_var = 0
 def temp_var():
     """Returns a unique(ish) name for a temporary variable."""
+    # XXX there is probably a safer, saner way to do this.
     _temp_var += 1
     return "_T%d" % _temp_var
 
@@ -94,7 +113,7 @@ UnaryOperatorFormats = {
     'positive': '(+{0})',
     'negative': '(-{0})',
     'not':      '(!{0})',
-    'convert':  'repr({0})',  # XXX not actually supported
+    'convert':  'repr({0})',  # XXX not actually supported (yet)
 }
 
 BinaryOperatorFormats = {
@@ -133,130 +152,122 @@ class CodeOp:
     """Container for the opcode, including logic to evaluate its effects on the stack."""
 
     def __init__(self, codefunc, op_name, value):
-        """codefunc: the parent function block.
-        op_name: the name of this operator.
-        value: operator parameter, suitably decoded. 
-        """
+        """Just initialize the object, don't really do anything yet."""
         
         self.codefunc = codefunc
         self.op_name = op_name
         self.value = value
-            
+        
         self.code = ""
 
-    def find_branches(self):
-        
-        if self.op_name.startswith('POP_JUMP_IF') or self.op_name.startswith('JUMP_IF'):
-            self.goto = [ codefunc.codeops[]
-        elif self.op_name.startswith('JUMP_'):
-            
-            
-    def run_stack(self, stack):
+    def execute(self, state):
+        """Run this op, mutating state in the process."""
         
         # NOPs
         
         if self.op_name == 'NOP':
             pass
 
-        # PUSH new stuff onto stack
+        # PUSH new stuff onto state
         
-        elif self.op_name in ('LOAD_CONST', 'LOAD_NAME', 'LOAD_FAST', 'LOAD_GLOBAL'): stack.push(self.value)
-        
+        elif self.op_name in ('LOAD_CONST', 'LOAD_NAME', 'LOAD_FAST', 'LOAD_GLOBAL'): state.push(self.value)
+        elif self.op_name == 'LOAD_ATTR':
+            state.push("%s.%s" % (self.extra, state.pop()))
+
         # PURE FUNCTIONAL
         
         elif self.op_name.startswith('UNARY_'):
             operator = lc(self.op_name[self.op_name.find("_")+1:])                        
-            stack.push(UnaryOperatorFormats[operator].format(stack.pop()))
+            state.push(UnaryOperatorFormats[operator].format(state.pop()))
             
         elif self.op_name.startswith('BINARY_') or self.op_name.startswith('INPLACE_'):
             operator = self.op_name[self.op_name.find("_")+1:].lower()
-            stack.push(BinaryOperatorFormats[operator].format(*stack.pop2()))
+            state.push(BinaryOperatorFormats[operator].format(*state.pop2()))
             
         elif self.op_name == 'COMPARE_OP':
-            tos, tos1 = stack.pop2()
-            stack.push(CompareOperatorFormats[self.extra].format(tos, tos1))
+            tos, tos1 = state.pop2()
+            state.push(CompareOperatorFormats[self.extra].format(tos, tos1))
         
-        elif self.op_name == 'POP_TOP':   stack.pop()    
-        elif self.op_name == 'DUP_TOP':   stack.dup()             # XXX check this is okay.
-        elif self.op_name == 'DUP_TOPX':  stack.dup(self.value)   # XXX this too.
-        elif self.op_name == 'ROT_TWO':   stack.rot(2)
-        elif self.op_name == 'ROT_THREE': stack.rot(3)
-        elif self.op_name == 'ROT_FOUR':  stack.rot(4)
+        elif self.op_name == 'POP_TOP':   state.pop()    
+        elif self.op_name == 'DUP_TOP':   state.dup()             # XXX check this is okay.
+        elif self.op_name == 'DUP_TOPX':  state.dup(self.value)   # XXX this too.
         
-        elif self.op_name == 'SLICE+0':   stack.push("%s.slice()" % stack.pop())
-        elif self.op_name == 'SLICE+1':   stack.push("%s.slice(%s)" % stack.pop2())
-        elif self.op_name == 'SLICE+2':   stack.push("%s.slice(0,%s)" % stack.pop2())
-        elif self.op_name == 'SLICE+3':   stack.push("%s.slice(%s,%s)" % stack.popn(3))
+        elif self.op_name == 'ROT_TWO':   state.rot(2)
+        elif self.op_name == 'ROT_THREE': state.rot(3)
+        elif self.op_name == 'ROT_FOUR':  state.rot(4)
+        
+        elif self.op_name == 'SLICE+0':   state.push("%s.slice()" % state.pop())
+        elif self.op_name == 'SLICE+1':   state.push("%s.slice(%s)" % state.pop2())
+        elif self.op_name == 'SLICE+2':   state.push("%s.slice(0,%s)" % state.pop2())
+        elif self.op_name == 'SLICE+3':   state.push("%s.slice(%s,%s)" % state.popn(3))
 
         elif self.op_name in ('BUILD_LIST', 'BUILD_TUPLE'): 
-            ll = stack.popn(self.value)
-            stack.push("[" + ",".join(ll) + "]")
+            ll = state.popn(self.value)
+            state.push("[" + ",".join(ll) + "]")
             
-        elif self.op_name == 'LOAD_ATTR':
-            stack.push("%s.%s" % (self.extra, stack.pop()))
+        elif self.op_name == 'BUILD_MAP': state.push("{}")
 
-        elif self.op_name == 'BUILD_MAP': stack.push("{}")
+        elif self.op_name in ('STORE_NAME', 'STORE_FAST'): self.code = "%s = %s" % (self.value, state.pop())
         elif self.op_name == 'STORE_MAP':
-            k, v, m = stack.popn(3)
+            k, v, m = state.popn(3)
             if m == '{}':
-                self.stack.push("{%s:%s}" % (k,v))
+                state.push("{%s:%s}" % (k,v))
             elif m.endswith("}"):
-                self.stack.push(m[:-1] + ",%s:%s" % (k,v) + "}")
+                state.push(m[:-1] + ",%s:%s" % (k,v) + "}")
             else:
                 raise NotImplementedError("Trying to STORE_MAP to something not a hash?")
-            
-        # ACTUALLY EMIT CODE!
-        
-        elif self.op_name == 'PRINT_ITEM': self.code = "print(%s)" % stack.pop()
-        elif self.op_name == 'PRINT_NEWLINE': self.code = "print('-----')"
-        elif self.op_name in ('STORE_NAME', 'STORE_FAST'): self.code = "%s = %s" % (self.value, stack.pop())
-        elif self.op_name in ('DELETE_NAME', 'DELETE_FAST'): self.code = "delete %s" % self.value
-        elif self.op_name == 'RETURN_VALUE': self.code = "return %s" % stack.pop()
-        elif self.op_name == 'LIST_APPEND': self.code = "%s.push(%s)" % stack.pop2()
-        elif self.op_name == 'DELETE_ATTR': self.code = "delete %s.%s" % (self.value, stack.pop())
-        
         elif self.op_name == 'STORE_ATTR':
-            val, obj = stack.pop2()
+            val, obj = state.pop2()
             self.code = "%s.%s = %s" % (obj, self.value, val)
+            
+        # ACTUALLY GENERATE SOME CODE!
+        
+        elif self.op_name == 'PRINT_ITEM': self.code = "print(%s)" % state.pop()
+        elif self.op_name == 'PRINT_NEWLINE': self.code = "print('-----')"
+        elif self.op_name in ('DELETE_NAME', 'DELETE_FAST'): self.code = "delete %s" % self.value
+        elif self.op_name == 'RETURN_VALUE': self.code = "return %s" % state.pop()
+        elif self.op_name == 'LIST_APPEND': self.code = "%s.push(%s)" % state.pop2()
+        elif self.op_name == 'DELETE_ATTR': self.code = "delete %s.%s" % (self.value, state.pop())
         
         elif self.op_name == 'CALL_FUNCTION':
-            # XXX we don't handle kwargs
-            kwargs = stack.popn(int(self.value / 256) * 2)      
-            args = stack.popn(self.value % 256)
-            func = stack.pop()
+            # XXX we don't handle kwargs yet
+            kwargs = state.popn(int(self.value / 256) * 2)      
+            args = state.popn(self.value % 256)
+            func = state.pop()
             
+            # Functions are always saved rather than added to 
+            # the expression state because that way we know they'll
+            # actually get run right away.
             # XXX it would be nice to optimize away void functions (followed by POP_TOP).
             # XXX or functions immediately followed by a STORE.
-            # XXX actually, maybe I do the opposite and only assign to a variable on DUP
-            # XXX and emit on POP!
             temp = temp_var()
             self.code = "var %s = %s(%s)" % (temp, func, ",".join(args))
-            stack.push(temp)
+            state.push(temp)
         
         elif self.op_name == 'UNPACK_SEQUENCE':
-            # XXX Do we ever actually need the temp values?
-            # XXX Or are they always used in expressions?
-            tos = stack.pop()
+            tos = state.pop()
             for n in range(0, self.value):
-                temp = temp_var(n)
-                self.code += "var %s = %s[%d]" % (temp, tos, n)
-                stack.push(temp)
+                # XXX Do we need to use temp values ?            
+                #temp = temp_var(n)
+                #self.code += "var %s = %s[%d]" % (temp, tos, n)
+                #state.push(temp)
+                state.push("%s[%d]" % (tos, n))
         
         elif self.op_name in ('JUMP_FORWARD', 'JUMP_ABSOLUTE'):
             self.code = "goto %s" % self.value
-            
-        elif self.op_name == 'JUMP_IF_TRUE': self.code = "if (%s) goto %s" % (stack.peek(), self.value)
-        elif self.op_name == 'POP_JUMP_IF_TRUE': self.code = "if (%s) goto %s" % (stack.pop(), self.value)
-        elif self.op_name == 'JUMP_IF_FALSE': self.code = "if (!%s) goto %s" % (stack.peek(), self.value)
-        elif self.op_name == 'POP_JUMP_IF_FALSE': self.code = "if (!%s) goto %s" % (stack.pop(), self.value)
+        
+        elif self.op_name == 'JUMP_IF_TRUE': self.code = "if (%s) goto %s" % (state.peek(), self.value)
+        elif self.op_name == 'POP_JUMP_IF_TRUE': self.code = "if (%s) goto %s" % (state.pop(), self.value)
+        elif self.op_name == 'JUMP_IF_FALSE': self.code = "if (!%s) goto %s" % (state.peek(), self.value)
+        elif self.op_name == 'POP_JUMP_IF_FALSE': self.code = "if (!%s) goto %s" % (state.pop(), self.value)
             
         elif self.op_name == 'RAISE_VARARGS':
-            ll = stack.popn(self.value)
+            ll = state.popn(self.value)
             self.code = "raise (%s)" % ",".join(ll)
             
         else:
             print "UNKNOWN OP %s" % self.op_name
-            
+    
     
     
 class CodeFunc:
@@ -264,14 +275,12 @@ class CodeFunc:
     
     def __init__(self, code_obj):
     
-        disassy = disx.disassemble(code_obj)
-        
-        self.codeobj = [ None ] * len(code_obj.co_code)
-        
         # XXX don't forget other constant code objects, eh?
         consts = [ repr(x) for x in code_obj.co_consts ]
         
-        self.codeobjs = []
+        disassy = disx.disassemble(code_obj)
+        
+        self.codeops = []
         for offset, op_code, op_name, op_args, etype, extra in disassy:
             if etype == 'const':
                 value = consts[op_args]
@@ -282,11 +291,19 @@ class CodeFunc:
             else:
                 value = op_args
             
-            self.codeobj[offset] = CodeOp(self, op_name, value)
-           
-    
-    
+            self.codeops.append(CodeOp(self, op_name, value))
         
+        stack = Stack()
+    
+# XXX Okay, so I think what will work is: 
+# * Start off with empty stack @ instruction 0
+# * Step along following default jumps (but recording side branches) until 
+# termination or already visited node (check states match)
+# * Repeat for each side branch
+# * Iterate through and gather .code for each codeop in order.
+    
+    
+
 def f(x):
     if y > 0:
         print "yay!"
