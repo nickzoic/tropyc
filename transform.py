@@ -49,76 +49,97 @@ class Stack:
     def is_empty(self):
         return len(self.stack) == 0
     
-# This list is from https://developer.mozilla.org/en/JavaScript/Reference/Reserved_Words
-# XXX add in words from http://docstore.mik.ua/orelly/webprog/jscript/ch02_08.htm
+# This list is from
+# * https://developer.mozilla.org/en/JavaScript/Reference/Reserved_Words
+# * http://docstore.mik.ua/orelly/webprog/jscript/ch02_08.htm
 # XXX are there any others needed to avoid upsetting the browser?
+# XXX or should I just mangle everything to $foo or something!
 
 ReservedWords = set(
-    "break case catch class const continue debugger default delete do else enum export extends \
-    false finally for function if implements import in instanceof interface let new null package private \
-    protected public return static super switch this throw true try typeof var void while with yield".split()
+    "abstract arguments array boolean break byte case catch char \
+    class const continue date debugger decodeuri decodeuricomponent \
+    default delete do double else encodeuri enum error escape eval \
+    evalerror export extends false final finally float for function \
+    goto if implements import in infinity instanceof int interface \
+    isfinite isnan let long math nan native new null number object \
+    package parsefloat parseint private protected public rangeerror \
+    referenceerror regexp return short static string super switch \
+    synchronized syntaxerror this throw throws transient true try \
+    typeerror typeof undefined unescape urierror var void \
+    volatile while with yield".split()
 )
 
 def name_mangle(name):
     """Mangle identifiers to avoid collision with JavaScript reserved words."""
     if name.startswith("_[") and name.endswith("]"): return "_q" + name[2:-1]
     if name.startswith("_"): return "_" + name
-    if lc(name) in ReservedWords:
-        return "_r" + name
+    if name.lower() in ReservedWords:
+        return "_R" + name
     return name
 
 
 # Translate Opcode names to Javascript operators.
+# XXX Sure would be nice to include precedence here.
 
 UnaryOperatorFormats = {
     'positive': '(+{0})',
     'negative': '(-{0})',
-    'not': '(!{0})'
+    'not':      '(!{0})',
+    'convert':  'repr({0})',  # XXX not actually supported
 }
 
 BinaryOperatorFormats = {
-    'power': '({0}**{1})',
-    'multiply': '({0}*{1})',
-    'divide': 'Math.floor({0}/{1})',
+    'power':        '({0}**{1})',
+    'multiply':     '({0}*{1})',
+    'divide':       'Math.floor({0}/{1})',
     'floor_divide': 'Math.floor({0}/{1})',
-    'true_divide': '({0}/{1})',
-    'modulo': '({0}%{1})',
-    'add': '({0}+{1})',
-    'subtract': '({0}-{1})',
-    'subscr': '({0}[{1}])',
-    'lshift': '({0}<<{1})',
-    'rshift': '({0}>>{1})',
-    'and': '({0}&{1})',
-    'xor': '({0}^{1})',
-    'or': '({0}|{1})',
+    'true_divide':  '({0}/{1})',
+    'modulo':       '({0}%{1})',
+    'add':          '({0}+{1})',
+    'subtract':     '({0}-{1})',
+    'subscr':       '({0}[{1}])',
+    'lshift':       '({0}<<{1})',
+    'rshift':       '({0}>>{1})',
+    'and':          '({0}&{1})',
+    'xor':          '({0}^{1})',
+    'or':           '({0}|{1})',
 }
 
 CompareOperatorFormats = {
-    '<': '({0}<{1})',
-    '<=': '({0}<={1})',
-    '==': '({0}=={1})',
-    '>=': '({0}>={1})',
-    '>': '({0}>{1})',
-    '!=': '({0}!={1})',
-    'in': '({0} in {1})',
+    '<':      '({0}<{1})',
+    '<=':     '({0}<={1})',
+    '==':     '({0}=={1})',
+    '>=':     '({0}>={1})',
+    '>':      '({0}>{1})',
+    '!=':     '({0}!={1})',
+    'in':     '({0} in {1})',
     'not in': '!({0} in {1})',
-    'is': '({0} === {1})',
+    'is':     '({0} === {1})',
     'is not': '({0} !== {1})',
 }
     
     
 class CodeOp:
     """Really just a container for the opcode"""
-    def __init__(self, offset, op_code, op_name, op_arg, etype, extra):
+    def __init__(self, codelump, offset, op_code, op_name, op_arg, etype, extra):
         
+        self.codelump = codelump
         self.offset = offset
         self.op_code = op_code
         self.op_name = op_name
         self.op_arg = op_arg
         self.etype = etype
         self.extra = extra
+        
+        if self.etype == 'const':
+            # XXX how about code objects, eh?
+            if self.extra is None: self.value = 'null'
+            else: self.value = repr(self.extra)
+        elif self.etype in ('name', 'global', 'local', 'free'):
+            self.value = name_mangle(self.extra)
+            
         self.code = ""
-
+        
     def tempvar(self, n=None):
         # XXX would this be better as a generator or something?
         if n is None: return "_T%d" % self.offset
@@ -133,7 +154,7 @@ class CodeOp:
 
         # PUSH new stuff onto stack
         
-        elif self.op_name in ('LOAD_CONST', 'LOAD_NAME', 'LOAD_FAST', 'LOAD_GLOBAL'): stack.push(self.extra)
+        elif self.op_name in ('LOAD_CONST', 'LOAD_NAME', 'LOAD_FAST', 'LOAD_GLOBAL'): stack.push(self.value)
         
         # PURE FUNCTIONAL
         
@@ -160,7 +181,7 @@ class CodeOp:
         elif self.op_name == 'SLICE+2':   stack.push("%s.slice(0,%s)" % stack.pop2())
         elif self.op_name == 'SLICE+3':   stack.push("%s.slice(%s,%s)" % stack.popn(3))
 
-        elif self.op_name in ('LOAD_LIST', 'LOAD_TUPLE'): 
+        elif self.op_name in ('BUILD_LIST', 'BUILD_TUPLE'): 
             ll = stack.popn(self.op_arg)
             stack.push("[" + ",".join(ll) + "]")
             
@@ -179,15 +200,15 @@ class CodeOp:
             
         # ACTUALLY EMIT CODE!
         
-        elif self.op_name in ('STORE_NAME', 'STORE_FAST'): self.code = "%s = %s" % (self.extra, stack.pop())
-        elif self.op_name in ('DELETE_NAME', 'DELETE_FAST'): self.code = "delete %s" % self.extra
+        elif self.op_name in ('STORE_NAME', 'STORE_FAST'): self.code = "%s = %s" % (self.value, stack.pop())
+        elif self.op_name in ('DELETE_NAME', 'DELETE_FAST'): self.code = "delete %s" % self.value
         elif self.op_name == 'RETURN_VALUE': self.code = "return %s" % stack.pop()
         elif self.op_name == 'LIST_APPEND': self.code = "%s.push(%s)" % stack.pop2()
-        elif self.op_name == 'DELETE_ATTR': self.code = "delete %s.%s" % (self.extra, stack.pop())
+        elif self.op_name == 'DELETE_ATTR': self.code = "delete %s.%s" % (self.value, stack.pop())
         
         elif self.op_name == 'STORE_ATTR':
             val, obj = stack.pop2()
-            self.code = "%s.%s = %s" % (obj, self.extra, val)
+            self.code = "%s.%s = %s" % (obj, self.value, val)
         
         elif self.op_name == 'CALL_FUNCTION':
             # XXX we don't handle kwargs
@@ -195,9 +216,12 @@ class CodeOp:
             args = stack.popn(self.op_arg % 256)
             func = stack.pop()
             
-            # XXX it would be nice to optimize away void functions.
+            # XXX it would be nice to optimize away void functions (followed by POP_TOP).
+            # XXX or functions immediately followed by a STORE.
+            # XXX actually, maybe I do the opposite and only assign to a variable on DUP
+            # XXX and emit on POP!
             temp = self.tempvar()
-            self.code = "%s = %s(%s)" % (temp, func, ",".join(args))
+            self.code = "var %s = %s(%s)" % (temp, func, ",".join(args))
             stack.push(temp)
         
         elif self.op_name == 'UNPACK_SEQUENCE':
@@ -216,6 +240,10 @@ class CodeOp:
         elif self.op_name == 'POP_JUMP_IF_FALSE':
             tos = stack.pop()
             self.code = "if (!%s) break" % tos
+        
+        elif self.op_name == 'RAISE_VARARGS':
+            ll = stack.popn(self.op_arg)
+            self.code = "raise (%s)" % ",".join(ll)
             
         else:
             print "UNKNOWN OP %s" % self.op_name
@@ -232,18 +260,17 @@ class CodeLump:
     
     def __init__(self, co, offset, length, line_no):
         
-        self.codeops = [ CodeOp(*x) for x in disx.disassemble(co, offset, length) ]
-        self.code = ""
-        self.stack = Stack()
+        self.codeops = [ CodeOp(self, *x) for x in disx.disassemble(co, offset, length) ]
         
+        print "CODELUMP %d" % offset
+        self.stack = Stack()
+
+        stack = Stack()        
         for codeop in self.codeops:
-            codeop.decompile(self.stack)
+            codeop.decompile(stack)
             if codeop.code:
-                print codeop.code
-                
-        if not self.stack.is_empty():
-            print "Hey, CodeLump at %d isn't stack-neutral" % offset
-            
+                print "\t", codeop.code
+        assert(stack.is_empty())
         
 def lnotab_gen(co):
     offset = 0
@@ -264,6 +291,7 @@ def lnotab_gen(co):
     
     
 class CodeObject:
+    """Represents a function or lambda, converting it to code."""
     
     def __init__(self, code_obj):
     
@@ -277,5 +305,5 @@ def f(x):
     else:
         return 0
 
-pprint.pprint(disx.dis(f))
-CodeObject(f.func_code)
+#pprint.pprint(disx.dis(f))
+CodeObject(disx.disassemble.func_code)
