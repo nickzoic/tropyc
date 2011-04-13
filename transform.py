@@ -1,4 +1,4 @@
-"""An improved Python byte code disassembler."""
+"""Transform Python Byte Code into JavaScript."""
 
 # XXX modify this so that each instruction gets its own object and stack frame: as we go around a loop 
 # the stack frames should hopefully line up.
@@ -8,13 +8,16 @@
 # but I have to identify the loops somehow.
 
 import sys
-import types
-import opcode
+import disx
+import pprint
 import dis
-import json
 
 class Stack:
-
+    """A simple stack class specialized to handle the operations we need
+    in the virtual machine.  Might make more sense to turn the list the 
+    other way up if that's quicker, but python stack never gets very deep
+    anyway."""
+    
     def __init__(self, copyfrom=[]):
         self.stack = copyfrom[:]
 
@@ -43,6 +46,9 @@ class Stack:
     def dup(self, n=1):
         self.stack[0:0] = self.stack[0:n]
 
+    def is_empty(self):
+        return len(self.stack) == 0
+    
 # This list is from https://developer.mozilla.org/en/JavaScript/Reference/Reserved_Words
 # XXX add in words from http://docstore.mik.ua/orelly/webprog/jscript/ch02_08.htm
 # XXX are there any others needed to avoid upsetting the browser?
@@ -62,397 +68,214 @@ def name_mangle(name):
     return name
 
 
+# Translate Opcode names to Javascript operators.
 
-class CodeNode:
+UnaryOperatorFormats = {
+    'positive': '(+{0})',
+    'negative': '(-{0})',
+    'not': '(!{0})'
+}
+
+BinaryOperatorFormats = {
+    'power': '({0}**{1})',
+    'multiply': '({0}*{1})',
+    'divide': 'Math.floor({0}/{1})',
+    'floor_divide': 'Math.floor({0}/{1})',
+    'true_divide': '({0}/{1})',
+    'modulo': '({0}%{1})',
+    'add': '({0}+{1})',
+    'subtract': '({0}-{1})',
+    'subscr': '({0}[{1}])',
+    'lshift': '({0}<<{1})',
+    'rshift': '({0}>>{1})',
+    'and': '({0}&{1})',
+    'xor': '({0}^{1})',
+    'or': '({0}|{1})',
+}
+
+CompareOperatorFormats = {
+    '<': '({0}<{1})',
+    '<=': '({0}<={1})',
+    '==': '({0}=={1})',
+    '>=': '({0}>={1})',
+    '>': '({0}>{1})',
+    '!=': '({0}!={1})',
+    'in': '({0} in {1})',
+    'not in': '!({0} in {1})',
+    'is': '({0} === {1})',
+    'is not': '({0} !== {1})',
+}
     
-    def __init__(self, code_obj):
-        self.code_obj = code_obj
-        self.stack = Stack()          # The 'expression stack'
-        self.blocks = []              # The 'block stack'
+    
+class CodeOp:
+    """Really just a container for the opcode"""
+    def __init__(self, offset, op_code, op_name, op_arg, etype, extra):
         
-        self.varnames = [ name_mangle(varname) for varname in code_obj.co_varnames ]
+        self.offset = offset
+        self.op_code = op_code
+        self.op_name = op_name
+        self.op_arg = op_arg
+        self.etype = etype
+        self.extra = extra
+        self.code = ""
 
-        # XXX this may also include code objects which json can't serialize.
-        # hey, that's what we're doing anyway!
-        self.consts = [
-            json.dumps(c) for c in code_obj.co_consts
-        ]
+    def tempvar(self, n=None):
+        # XXX would this be better as a generator or something?
+        if n is None: return "_T%d" % self.offset
+        else: return "_T%d_%s" % (self.offset, n)
         
-        self.code_nodes = [ None ] * len(code_obj.co_code)
+    def decompile(self, stack):
         
-        # XXX for the moment, we can leave these as they are just optimizations
-        if op_name.startswith("inplace_"):
-            op_name = op_name.replace("inplace_", "binary_")
+        # NOPs
+        
+        if self.op_name == 'NOP':
+            pass
 
-        if hasattr(self, op_name):
-            if op_arg is not None:
-                getattr(self, op_name)(op_arg)
+        # PUSH new stuff onto stack
+        
+        elif self.op_name in ('LOAD_CONST', 'LOAD_NAME', 'LOAD_FAST', 'LOAD_GLOBAL'): stack.push(self.extra)
+        
+        # PURE FUNCTIONAL
+        
+        elif self.op_name.startswith('UNARY_'):
+            operator = lc(self.op_name[self.op_name.find("_")+1:])                        
+            stack.push(UnaryOperatorFormats[operator].format(stack.pop()))
+            
+        elif self.op_name.startswith('BINARY_') or self.op_name.startswith('INPLACE_'):
+            operator = self.op_name[self.op_name.find("_")+1:].lower()
+            stack.push(BinaryOperatorFormats[operator].format(*stack.pop2()))
+            
+        elif self.op_name == 'COMPARE_OP':
+            tos, tos1 = stack.pop2()
+            stack.push(CompareOperatorFormats[self.extra].format(tos, tos1))
+        
+        elif self.op_name == 'POP_TOP':   stack.pop()    
+        elif self.op_name == 'DUP_TOP':   stack.dup()
+        elif self.op_name == 'ROT_TWO':   stack.rot(2)
+        elif self.op_name == 'ROT_THREE': stack.rot(3)
+        elif self.op_name == 'ROT_FOUR':  stack.rot(4)
+        
+        elif self.op_name == 'SLICE+0':   stack.push("%s.slice()" % stack.pop())
+        elif self.op_name == 'SLICE+1':   stack.push("%s.slice(%s)" % stack.pop2())
+        elif self.op_name == 'SLICE+2':   stack.push("%s.slice(0,%s)" % stack.pop2())
+        elif self.op_name == 'SLICE+3':   stack.push("%s.slice(%s,%s)" % stack.popn(3))
+
+        elif self.op_name in ('LOAD_LIST', 'LOAD_TUPLE'): 
+            ll = stack.popn(self.op_arg)
+            stack.push("[" + ",".join(ll) + "]")
+            
+        elif self.op_name == 'LOAD_ATTR':
+            stack.push("%s.%s" % (self.extra, stack.pop()))
+
+        elif self.op_name == 'BUILD_MAP': stack.push("{}")
+        elif self.op_name == 'STORE_MAP':
+            k, v, m = stack.popn(3)
+            if m == '{}':
+                self.stack.push("{%s:%s}" % (k,v))
+            elif m.endswith("}"):
+                self.stack.push(m[:-1] + ",%s:%s" % (k,v) + "}")
             else:
-                getattr(self, op_name)()
+                raise NotImplementedError("Trying to STORE_MAP to something not a hash?")
+            
+        # ACTUALLY EMIT CODE!
+        
+        elif self.op_name in ('STORE_NAME', 'STORE_FAST'): self.code = "%s = %s" % (self.extra, stack.pop())
+        elif self.op_name in ('DELETE_NAME', 'DELETE_FAST'): self.code = "delete %s" % self.extra
+        elif self.op_name == 'RETURN_VALUE': self.code = "return %s" % stack.pop()
+        elif self.op_name == 'LIST_APPEND': self.code = "%s.push(%s)" % stack.pop2()
+        elif self.op_name == 'DELETE_ATTR': self.code = "delete %s.%s" % (self.extra, stack.pop())
+        
+        elif self.op_name == 'STORE_ATTR':
+            val, obj = stack.pop2()
+            self.code = "%s.%s = %s" % (obj, self.extra, val)
+        
+        elif self.op_name == 'CALL_FUNCTION':
+            # XXX we don't handle kwargs
+            kwargs = stack.popn(int(self.op_arg / 256) * 2)      
+            args = stack.popn(self.op_arg % 256)
+            func = stack.pop()
+            
+            # XXX it would be nice to optimize away void functions.
+            temp = self.tempvar()
+            self.code = "%s = %s(%s)" % (temp, func, ",".join(args))
+            stack.push(temp)
+        
+        elif self.op_name == 'UNPACK_SEQUENCE':
+            # XXX Do we ever actually need the temp values?
+            # XXX Or are they always used in expressions?
+            tos = stack.pop()
+            for n in range(0, op_arg):
+                temp = self.tempvar(n)
+                self.code += "var %s = %s[%d]" % (temp, tos, n)
+                stack.push(temp)
+        
+        elif self.op_name == 'POP_JUMP_IF_TRUE':
+            tos = stack.pop()
+            self.code = "if (%s) break" % tos
+            
+        elif self.op_name == 'POP_JUMP_IF_FALSE':
+            tos = stack.pop()
+            self.code = "if (!%s) break" % tos
+            
         else:
-            print "Unknown Opcode %s" % op_name
-
-    def emit(self, code):
-        print code
-
-    def unary_op(self, operator, pre="(", post=")"):
-        a = self.stack.pop()
-        self.stack.push(''.join((pre,operator,a,post)))
-
-    def binary_op(self, operator, pre="(", post=")"):
-        a,b = self.stack.pop2()
-        self.stack.push(''.join((pre,a,operator,b,post)))
-
-    def save_stack(self):
-        # XXX hopefully not necessary, def. not optimal!
-        for n, e in enumerate(self.stack):
-            self.emit("var _s%d = %s;" % (n, e))
-        nn = len(self.stack)
-        self.stack = ["_s%d" % n for n in range(0,nn)]
-
-    temp_counter = 0
-
-    def make_temp(self):
-        self.temp_counter += 1
-        return "_t%d" % self.temp_counter
-
-    #----- opcodes
-
-    def stop_code(self):
-        pass
-
-    def nop(self):
-        pass
-
-    def pop_top(self):
-        self.stack.pop()
-
-    def rot_two(self):
-        self.stack.rot(2)
-
-    def rot_three(self):
-        self.stack.rot(3)
-
-    def rot_four(self):
-        self.stack.rot(4)
-
-    def dup_top(self):
-        # XXX needs to work out if tos is an expression or not
-        tos = self.stack.pop()
-        temp = self.make_temp()
-        self.emit("var %s = %s" % (temp, tos))
-        self.stack.push(temp)
-        self.stack.push(temp)
-
-    def unary_positive(self):
-        self.unary_op('+')
-
-    def unary_negative(self):
-        self.unary_op('-')
-
-    def unary_not(self):
-        self.unary_op('!')
-
-    def unary_convert(self):
-        # XXX repr isn't real javascript, not actually implemented yet!
-        self.unary_op('', 'repr(')
-
-    def unary_invert(self):
-        self.unary_op('~')
-
-    # def get_iter(self):
-
-    def binary_power(self):
-        self.binary_op('**')
-
-    def binary_multiply(self):
-        self.binary_op('*')
-
-    def binary_floor_divide(self):
-        self.binary_op("/", "Math.floor(")
-
-    binary_divide = binary_floor_divide
-
-    def binary_true_divide(self):
-        self.binary_op('/')
-
-    def binary_modulo(self):
-        self.binary_op('%')
-
-    def binary_add(self):
-        self.binary_op('+')
-
-    def binary_subtract(self):
-        self.binary_op('-')
-
-    def binary_lshift(self):
-        self.binary_op('<<')
-
-    def binary_rshift(self):
-        self.binary_op('>>')
-
-    def binary_and(self):
-        self.binary_op('&')
-
-    def binary_xor(self):
-        self.binary_op('^')
-
-    def binary_or(self):
-        self.binary_op('|')
-
-    # inplace_* is currently mapped to binary_*
-
-    def slice_0(self):
-        # Exactly like python, b = a.slice() ends up with a new list
-        # with the same content as a.
-        self.stack.unary_op("","",".slice()")
-
-    def slice_1(self):
-        tos, tos1 = self.stack.pop2()
-        self.stack.push("%s.slice(%d)" % (tos1, tos))
-
-    def slice_2(self):
-        tos, tos1 = self.stack.pop2()
-        self.stack.push("%s.slice(0,%d)" % (tos1, tos))
-
-    def slice_3(self):
-        tos, tos1, tos2 = self.stack.popn(3)
-        self.stack.push("%s.slice(%d,%d)" % (tos2, tos1, tos))
-
-    # store_slice_* and delete_slice_* I'll worry about later
-
-    def print_item(self):
-        tos = self.stack.pop()
-        self.emit("console.log(%s);" % tos)
-
-    def print_newline(self):
-        self.emit("console.log('-----');")
-
-    def return_value(self):
-        tos = self.stack.pop()
-        self.emit("return %s;" % tos)
-
-    def store_name(self, n):
-        self.emit("%s = %s;" % (self.code_obj.co_names[n], self.stack.pop()))
-
-    def delete_name(self, n):
-        self.emit("delete %s;" % self.code_obj.co_names[n])
-
-    def dup_topx(self, n):
-        # XXX should do something cleverer like dup_top?
-        self.stack.dup(n)
-
-    def load_const(self, n):
-        self.stack.push(self.consts[n])
-
-    def load_name(self, n):
-        self.stack.push(self.code_obj.co_names[n])
-
-    load_global = load_name
-
-    def build_tuple(self, n):
-        ll = self.stack.popn(n)
-        self.stack.push("[" + ",".join(ll) + "]")
-
-    build_list = build_tuple
-
-    def build_map(self, n):
-        self.stack.push("{}")
-
-    def store_map(self):
-        k, v, m = self.stack.popn(3)
-        if m == '{}':
-            self.stack.push("{%s:%s}" % (k,v))
-        elif m.endswith("}"):
-            self.stack.push(m[:-1] + ",%s:%s" % (k,v) + "}")
-        else:
-            # XXX does this ever happen?
-            self.stack.push(m)
-            self.emit("%s[%s] = %s;" % (m,k,v))
-
-    def compare_op(self, n):
-        # XXX missing a couple of cases
-        op = opcode.cmp_op[n]
-        if op == 'in':
-            self.binary_op(" in ")
-        elif op == 'not in':
-            self.binary_op(" in ", "!(")
-        elif op == 'is':
-            self.binary_op("===")
-        elif op == 'is not':
-            self.binary_op("!==")
-        else:
-            self.binary_op(op)
-
-    def jump_forward(self, n):
-        self.emit("XXX goto %d;" % n)
-
-    def jump_if_true(self, n):
-        tos = self.stack.peek()
-        self.emit("XXX if %s goto %d;" % (tos, n))
-
-    def jump_if_false(self, n):
-        tos = self.stack.peek()
-        self.emit("XXX if (!%s) goto %d;" % (tos, n))
-
-    def jump_absolute(self, n):
-        self.emit("XXX goabs %d;" % n)
-
-    def load_fast(self, n):
-        self.stack.push(self.varnames[n])
-
-    def store_fast(self, n):
-        self.emit("%s = %s;" % (self.varnames[n], self.stack.pop()))
-
-    def delete_fast(self, n):
-        self.emit("delete %s;" % self.varnames[n]);
-
-    def call_function(self, n):
-        # XXX key params aren't part of javascript ... how to handle them?
-        # standard way seems to be "options" as first parameter.
-        key_params_list = self.stack.popn((n / 256) * 2)
-        key_params_list.reverse()
-        key_params_pairs = zip(key_params_list[0::2], key_params_list[1::2])
-        key_params_str = "{" + ','.join(["%s:%s" % (k,v) for k,v in key_params_pairs]) + "}," if key_params_list else ""
-
-        pos_params_list = reversed(self.stack.popn(n % 256))
-        pos_params_str = ",".join(pos_params_list)
-
-        func = self.stack.pop()
-
-        # XXX it would be great to optimize void functions away
-        # instead of temp variabling them
-        temp = self.make_temp()
-        self.emit("var %s = %s(%s%s);" % (temp, func, key_params_str, pos_params_str))
-        self.stack.push(temp)
-
-    def list_append(self):
-        self.emit("%s.append(%s);" % self.stack.pop2())
-
-    def load_attr(self, n):
-        tos = self.stack.pop()
-        self.stack.push("%s.%s" % (tos, self.code_obj.co_names[n]))
-
-    def store_attr(self, n):
-        tos, tos1 = self.stack.pop2()
-        self.emit("%s.%s = %s;" % (tos, self.code_obj.co_names[n], tos1))
-
-    def delete_attr(self, n):
-        tos = self.stack.pop()
-        self.emit("delete %s.%s;" % (tos, self.code_obj.co_names[n]))
-
-    def unpack_sequence(self, n):
-        # XXX Do we actually need the temp vars?  Probably not.
-        tos = self.stack.pop()
-        for i in reversed(range(0,n)):
-            temp = self.make_temp()
-            self.emit("var %s = %s[%d];" % (temp, tos, i))
-            self.stack.push(temp)
-
-    def setup_loop(self, n):
-        self.blocks.append(self.make_temp())
+            print "UNKNOWN OP %s" % self.op_name
+            
+class CodeLump:
+    """A CodeLump is a logical group of CodeOps.  The distinguishing feature is
+    that a CodeLump is stack-neutral, eg: the stack is in the same state exiting
+    the CodeLump as it was entering it.  The Python 2.7 compiler actually gives
+    away the location of each code lump through the co_lnotab structure, which
+    has one row for each CodeLump.  If this didn't exist we'd have to work it
+    out by watching the stack.  The nice thing about all this is that we DO NOT
+    want to reproduce a stack machine in the target language, rather we want to
+    roll the stack operations up into expressions."""
     
-    def for_iter(self, n):
-        self.emit("%s: while (1) {" % self.blocks[0])
+    def __init__(self, co, offset, length, line_no):
         
-    def pop_block(self, n):
-        self.emit("}")
-        self.blocks.pop()
+        self.codeops = [ CodeOp(*x) for x in disx.disassemble(co, offset, length) ]
+        self.code = ""
+        self.stack = Stack()
         
-    #-----
+        for codeop in self.codeops:
+            codeop.decompile(self.stack)
+            if codeop.code:
+                print codeop.code
+                
+        if not self.stack.is_empty():
+            print "Hey, CodeLump at %d isn't stack-neutral" % offset
+            
+        
+def lnotab_gen(co):
+    offset = 0
+    line_no = co.co_firstlineno
     
-
-    def despatch(self, op, op_arg=None):
-        op_name = opcode.opname[op].lower().replace('+', '_')
-        
-        # XXX for the moment, we can leave these as they are just optimizations
-        if op_name.startswith("inplace_"):
-            op_name = op_name.replace("inplace_", "binary_")
-
-        if hasattr(self, op_name):
-            if op_arg is not None:
-                getattr(self, op_name)(op_arg)
-            else:
-                getattr(self, op_name)()
-        else:
-            print "Unknown Opcode %s" % op_name
-
-
+    # XXX a bit clumsy
+    for ncode, nline in zip(
+        [ord(c) for c in co.co_lnotab[0::2]],
+        [ord(c) for c in co.co_lnotab[1::2]]
+    ):
+        if ncode:
+            yield offset, ncode, line_no
+            offset += ncode
+        line_no += nline
+    
+    if len(co.co_code) > offset:
+        yield offset, len(co.co_code) - offset, line_no
+    
+    
 class CodeObject:
     
     def __init__(self, code_obj):
-        self.code_obj = code_obj
-        
-        self.stack = Stack()          # The 'expression stack'
-        self.blocks = []              # The 'block stack'
-        
-        self.varnames = [ name_mangle(varname) for varname in code_obj.co_varnames ]
-
-        # XXX this may also include code objects which json can't serialize.
-        # hey, that's what we're doing anyway!
-        self.consts = [ json.dumps(c) for c in code_obj.co_consts ]
-        
-        self.code_nodes = [ None ] * len(code_obj.co_code)
-        
-        code = self.code_obj.co_code
-        cur_code = 0
-        extended_arg = 0
-
-        self.ops = [ None ] * len(code)
-
-        while cur_code < len(code):
-            op = ord(code[cur_code])
-            op_arg = None
-
-            if op >= opcode.HAVE_ARGUMENT:
-                op_arg = ord(code[cur_code+1]) + ord(code[cur_code+2])*256 + extended_arg
-
-                extended_arg = 0                
-                if op == opcode.EXTENDED_ARG:
-                    extended_arg = op_arg*65536L
-                else:
-                    self.ops[cur_code] = (op, op_arg)
-
-                cur_code += 3
-            else:
-                self.ops[cur_code] = (op, None)
-                cur_code += 1
-
-            self.codenodes[cur_code] = CodeNode(op, op_arg)
-            
-        for offset, codenode in enumerate(self.codenodes):
-            if codenode is None: continue
-            codenode.work(self.codenodes, offset)
-            
-            self.despatch(op, op_arg)
-
-    def header(self):
-        print "function %s (%s) {\n\t/* %s:%s */" % (
-            self.code_obj.co_name,
-            ",".join(self.varnames[0:self.code_obj.co_argcount]),
-            self.code_obj.co_filename,
-            self.code_obj.co_firstlineno,
-        )
-
-        for varname in self.varnames[self.code_obj.co_argcount:]:
-            print "\tvar %s;" % varname
-
-    def footer(self):
-        print "}"
-
+    
+        self.lumps = [ CodeLump(code_obj, *x) for x in lnotab_gen(code_obj) ]
+                    
 
         
+def f(x):
+    if x > 0: 
+        return x + 1
+    else:
+        return 0
 
-        
-def foo(x,y):
-    a, b, c, d = range(0,4)
-    return a, b
-
-
-
-dis.dis(foo)
-
-x = CodeTransformer(foo.func_code)
-x.header()
-x.analyse()
-x.footer()
+pprint.pprint(disx.dis(f))
+CodeObject(f.func_code)
