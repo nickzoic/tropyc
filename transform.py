@@ -49,7 +49,7 @@ class State:
 
     def is_empty(self):
         return len(self.stack) == 0
-    
+            
 # This list is from
 # * https://developer.mozilla.org/en/JavaScript/Reference/Reserved_Words
 # * http://docstore.mik.ua/orelly/webprog/jscript/ch02_08.htm
@@ -285,7 +285,7 @@ class CodeFunc:
             if etype == 'const':
                 value = consts[op_args]
             elif etype in ('name', 'global', 'local', 'free'):
-                value = repr(self.extra)
+                value = repr(extra)
             elif etype:
                 value = extra
             else:
