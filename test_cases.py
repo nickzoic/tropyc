@@ -3,28 +3,31 @@
 
 import tempfile
 import os
-#import tropyc
+import tropyc
 
 def test(func, args):
     answer = func(*args)
 
-    #xfunc = tropyc.CodeFunction(func)
+    xfunc = tropyc.CodeFunction(func.func_code)
     
     tempfd, tempname = tempfile.mkstemp(suffix=".js")
-    #for jsline in xfunc.jscode():
-    #    os.write(tempfd, jsline + "\n")
-    #os.write(tempfd, "print(%s);\n" % xfunc.invoke(args))
-    os.write(tempfd, 'print("%s");' % answer)
+    
+    for jsline in xfunc.jscode():
+        os.write(tempfd, jsline + "\n")
+        
+    os.write(tempfd, "print(%s(%s));\n" % (xfunc.funcname, ",".join([repr(a) for a in args])))
+    
+    #os.write(tempfd, 'print("%s");' % answer)
     os.close(tempfd)
     
     rhino = os.popen("rhino -f %s" % tempname)
     result = rhino.read()
     rhino.close()
     
-    os.unlink(tempname)
+    #os.unlink(tempname)
 
     label = func.__name__ + (": " + func.__doc__ if func.__doc__ else "")
-    status = "PASS" if int(answer) == int(result) else "FAIL"
+    status = "PASS" if str(answer).strip() == str(result).strip() else "FAIL"
     print "%-40s %s" % (label, status)
     
 def a():

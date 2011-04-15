@@ -240,14 +240,14 @@ class CodeOp:
     
         # ACTUALLY GENERATE SOME CODE!
         
-        elif self.op_name == 'PRINT_ITEM': self.code = "print(%s);" % state.pop()
-        elif self.op_name == 'PRINT_NEWLINE': self.code = "print('-----');"
-        elif self.op_name in ('DELETE_NAME', 'DELETE_FAST'): self.code = "delete %s;" % self.value
-        elif self.op_name == 'LIST_APPEND': self.code = "%s.push(%s);" % state.pop2()
-        elif self.op_name == 'DELETE_ATTR': self.code = "delete %s.%s;" % (self.value, state.pop())
+        elif self.op_name == 'PRINT_ITEM': self.code += "print(%s);" % state.pop()
+        elif self.op_name == 'PRINT_NEWLINE': self.code += "print('-----');"
+        elif self.op_name in ('DELETE_NAME', 'DELETE_FAST'): self.code += "delete %s;" % self.value
+        elif self.op_name == 'LIST_APPEND': self.code += "%s.push(%s);" % state.pop2()
+        elif self.op_name == 'DELETE_ATTR': self.code += "delete %s.%s;" % (self.value, state.pop())
         
         elif self.op_name == 'RETURN_VALUE':
-            self.code = "return %s;" % state.pop()
+            self.code += "return %s;" % state.pop()
             self.nextoffs = None
             
         elif self.op_name == 'CALL_FUNCTION':
@@ -262,7 +262,7 @@ class CodeOp:
             # XXX it would be nice to optimize away void functions (followed by POP_TOP).
             # XXX or functions immediately followed by a STORE.
             temp = self.codefunc.templabel()
-            self.code = "var %s = %s(%s);" % (temp, func, ",".join(args))
+            self.code += "var %s = %s(%s);" % (temp, func, ",".join(args))
             state.push(temp)
         
         #elif self.op_name == 'RAISE_VARARGS':
@@ -274,12 +274,12 @@ class CodeOp:
         elif self.op_name == 'SETUP_LOOP':
             self.jumpoffs = self.value
             label = self.codefunc.block_add(self.offset, self.value)
-            self.code = "%s: while (1) {" % label
+            self.code += "%s: while (1) {" % label
             
         elif self.op_name == 'GET_ITER':
             iterable = state.pop()
             temp = self.codefunc.templabel()
-            self.code = "var %s = %s;" % (temp, iterable)
+            self.code += "var %s = %s;" % (temp, iterable)
             state.push(temp)
             
         elif self.op_name == 'FOR_ITER':
@@ -287,19 +287,19 @@ class CodeOp:
             label = self.codefunc.block_mod(self.offset, self.value)
             iterator = state.peek()
             temp = self.codefunc.templabel()
-            self.code = "%s: for (var %s in %s) {" % (label, temp, iterator)  
+            self.code += "%s: for (var %s in %s) {" % (label, temp, iterator)  
             state.push("%s[%s]" % (iterator, temp))
             
         elif self.op_name == 'POP_BLOCK':
-            self.code = "break; }"
+            self.code += "break; }"
             
         elif self.op_name == 'CONTINUE_LOOP':
             label, end = state.find_loop(self.value - 3, end=False)
-            self.code = "continue %s;" % label
+            self.code += "continue %s;" % label
 
         elif self.op_name == 'BREAK_LOOP':
             label, start, end = self.codefunc.block_inner(offset)
-            self.code = "break %s;" % label
+            self.code += "break %s;" % label
             self.nextoffs = end
         
         elif self.op_name.startswith("JUMP_") or self.op_name.startswith("POP_JUMP_"):
@@ -312,16 +312,22 @@ class CodeOp:
             # The difficulty here is that we don't always know whether a given JUMP is a loop 
             # break/continue or part of an if / elif / else.
             
+            # XXX Also, differences between opcode layout in 2.6 and 2.7 ... which come down
+            # to POP_JUMP_IF_*
+            
             label = self.codefunc.block_start(self.value-3) or self.codefunc.block_start(self.value)
             if label:
-                self.code = branch + "continue %s;" % label 
+                self.code += branch + "continue %s;" % label 
             else:
                 label = self.codefunc.block_end(self.value+2) or self.codefunc.block_end(self.value+1)
                 if label:
-                    self.code = branch + "break %s;" % label
+                    self.code += branch + "break %s;" % label
                 else:
-                    # XXX this is a "real" goto
-                    self.code = branch + "GOTO %s;" % self.value
+                    if branch:
+                        self.code += branch + " {"
+                    else:
+                        self.code += "} else {"
+                        self.codefunc.codeops[self.value].code = "} " + self.codefunc.codeops[self.value].code
             
             if not branch:
                 self.nextoffs = self.value
@@ -335,11 +341,14 @@ class CodeOp:
 class CodeFunction:
     """Represents a function or lambda, converting it to code."""
     
-    blocks = []
-    
     def __init__(self, code_obj, prefix="$P"):
     
         self.prefix = prefix
+        self.blocks = []
+        
+        self.funcname = self.label(code_obj.co_name)
+        self.params = [ self.label(x) for x in code_obj.co_varnames[0:code_obj.co_argcount] ]
+        self.varnames = [ self.label(x) for x in code_obj.co_varnames[code_obj.co_argcount:] ]
         
         # XXX don't forget other constant code objects, eh?
         consts = [ repr(x) for x in code_obj.co_consts ]
@@ -365,16 +374,20 @@ class CodeFunction:
         
         cursors = [ (0, Stack()) ]
         for offset, stack in cursors:
-            print ">>> %d", offset
             curop = self.codeops[offset]
             curop.execute(stack)
             if curop.nextoffs and not self.codeops[curop.nextoffs].visited: cursors.append( (curop.nextoffs, stack) )
             if curop.jumpoffs and not self.codeops[curop.nextoffs].visited: cursors.append( (curop.jumpoffs, Stack(stack)) )
             
     def jscode(self):
+        yield "function %s (%s) {" % (self.funcname, ",".join(self.params))
+        for varname in self.varnames:
+            yield "var %s;" % varname
         for codeop in self.codeops:
             if codeop: yield "/* %6d %-20s */ %s" % (codeop.offset, "%s %s" % (codeop.op_name, codeop.value), codeop.code if codeop.code else "")
-            
+            #if codeop and codeop.code: yield "\t" + codeop.code
+        yield "}"
+    
     def label(self, name):
         return "%s%s" % (self.prefix, name)
 
@@ -415,27 +428,3 @@ class CodeFunction:
             if block[1] == offset or block[2] == offset: return block[0]
         return None
         
-# XXX Okay, so I think what will work is: 
-# * Start off with empty stack @ instruction 0
-# * Step along following default jumps (but recording side branches) until 
-# termination or already visited node (check states match)
-# * Repeat for each side branch
-# * Iterate through and gather .code for each codeop in order.
-    
-    
-
-def f(x):
-    for a in [1,2,3,4,5]:
-        print a
-        
-def g(x):
-    i = 0
-    while i < 5:
-        print i
-        i += 1
-
-ff = CodeFunction(f.func_code)
-print "\n".join(ff.jscode())
-
-gg = CodeFunction(g.func_code)
-print "\n".join(gg.jscode())
