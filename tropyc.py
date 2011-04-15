@@ -1,4 +1,4 @@
-"""Transform Python Byte Code into JavaScript."""
+"""TROPYC: TRansform Objects from PYthon Code (into JavaScript)."""
 
 # XXX modify this so that each instruction gets its own object and stack frame: as we go around a loop 
 # the stack frames should hopefully line up.
@@ -12,15 +12,12 @@ import disx
 import pprint
 import re
 
-class State:
-    """Holds the changing state of the virtual machine as the CodeOps 
-    execute on it.  Provides simple stack operations plus any other 
-    state which is needed."""
-    # XXX Might make sense to turn the self.stack the other way up
-    # but the expression stack never gets very deep anyway.
+class Stack:
+    """Holds the expression stack of the virtual machine as the CodeOps 
+    execute on it.  Provides simple stack operations"""
     
-    def __init__(self, copyfrom=[]):
-        self.stack = copyfrom[:]
+    def __init__(self, copyfrom=None):
+        self.stack = copyfrom.stack[:] if copyfrom else []
 
     def push(self, arg):
         self.stack.insert(0, arg)
@@ -41,6 +38,9 @@ class State:
     def peek(self):
         return self.stack[0]
 
+    def peekn(self, n):
+        return self.stack[0:n]
+    
     def rot(self, n=1):
         self.stack[0:n] = self.stack[n-1::-1]
 
@@ -153,21 +153,31 @@ class CodeOp:
     
     """Container for the opcode, including logic to evaluate its effects on the stack."""
 
-    def __init__(self, codefunc, op_name, value):
+    def __init__(self, codefunc, offset, op_name, value):
         """Just initialize the object, don't really do anything yet."""
         
         self.codefunc = codefunc
+        self.offset = offset
         self.op_name = op_name
         self.value = value
         
         self.code = ""
 
+        self.nextoffs = None
+        self.jumpoffs = None
+        
+        self.visited = False
+        
     def execute(self, state):
         """Run this op, mutating state in the process."""
         
         # XXX There are much nicer ways to structure this than a giant "elif"
         
         # PURE FUNCTIONAL STUFF
+        
+        self.nextoffs = self.offset + (3 if self.value else 1)
+        self.jumpoffs = None
+        self.visited = True
         
         if self.op_name == 'NOP': pass
         elif self.op_name in ('LOAD_CONST', 'LOAD_NAME', 'LOAD_FAST', 'LOAD_GLOBAL'):
@@ -184,7 +194,7 @@ class CodeOp:
             
         elif self.op_name == 'COMPARE_OP':
             tos, tos1 = state.pop2()
-            state.push(CompareOperatorFormats[self.extra].format(tos, tos1))
+            state.push(CompareOperatorFormats[self.value].format(tos, tos1))
         
         elif self.op_name == 'POP_TOP':   state.pop()    
         elif self.op_name == 'DUP_TOP':   state.dup()             # XXX check this is okay.
@@ -200,12 +210,12 @@ class CodeOp:
         elif self.op_name == 'SLICE+3':   state.push("%s.slice(%s,%s)" % state.popn(3))
 
         elif self.op_name in ('BUILD_LIST', 'BUILD_TUPLE'): 
-            ll = state.popn(self.value)
+            ll = reversed(state.popn(self.value))
             state.push("[" + ",".join(ll) + "]")
             
         elif self.op_name == 'BUILD_MAP': state.push("{}")
 
-        elif self.op_name in ('STORE_NAME', 'STORE_FAST'): self.code = "%s = %s" % (self.value, state.pop())
+        elif self.op_name in ('STORE_NAME', 'STORE_FAST'): self.code = "%s = %s;" % (self.value, state.pop())
         elif self.op_name == 'STORE_MAP':
             k, v, m = state.popn(3)
             if m == '{}':
@@ -233,10 +243,13 @@ class CodeOp:
         elif self.op_name == 'PRINT_ITEM': self.code = "print(%s);" % state.pop()
         elif self.op_name == 'PRINT_NEWLINE': self.code = "print('-----');"
         elif self.op_name in ('DELETE_NAME', 'DELETE_FAST'): self.code = "delete %s;" % self.value
-        elif self.op_name == 'RETURN_VALUE': self.code = "return %s;" % state.pop()
         elif self.op_name == 'LIST_APPEND': self.code = "%s.push(%s);" % state.pop2()
         elif self.op_name == 'DELETE_ATTR': self.code = "delete %s.%s;" % (self.value, state.pop())
         
+        elif self.op_name == 'RETURN_VALUE':
+            self.code = "return %s;" % state.pop()
+            self.nextoffs = None
+            
         elif self.op_name == 'CALL_FUNCTION':
             # XXX we don't handle kwargs yet
             kwargs = state.popn(int(self.value / 256) * 2)      
@@ -248,82 +261,159 @@ class CodeOp:
             # actually get run right away.
             # XXX it would be nice to optimize away void functions (followed by POP_TOP).
             # XXX or functions immediately followed by a STORE.
-            temp = temp_var()
+            temp = self.codefunc.templabel()
             self.code = "var %s = %s(%s);" % (temp, func, ",".join(args))
             state.push(temp)
         
-        elif self.op_name == 'RAISE_VARARGS':
-            ll = state.popn(self.value)
-            self.code = "raise (%s);" % ",".join(ll)
+        #elif self.op_name == 'RAISE_VARARGS':
+        #    ll = state.popn(self.value)
+        #    self.code = "raise (%s);" % ",".join(ll)
         
         # LOOPING AND BRANCHING
         
         elif self.op_name == 'SETUP_LOOP':
-            label = state.label_loop(self.value)
-            self.code = "%s: while(1) {"
-        
+            self.jumpoffs = self.value
+            label = self.codefunc.block_add(self.offset, self.value)
+            self.code = "%s: while (1) {" % label
+            
+        elif self.op_name == 'GET_ITER':
+            iterable = state.pop()
+            temp = self.codefunc.templabel()
+            self.code = "var %s = %s;" % (temp, iterable)
+            state.push(temp)
+            
+        elif self.op_name == 'FOR_ITER':
+            self.jumpoffs = self.value
+            label = self.codefunc.block_mod(self.offset, self.value)
+            iterator = state.peek()
+            temp = self.codefunc.templabel()
+            self.code = "%s: for (var %s in %s) {" % (label, temp, iterator)  
+            state.push("%s[%s]" % (iterator, temp))
+            
         elif self.op_name == 'POP_BLOCK':
             self.code = "break; }"
             
         elif self.op_name == 'CONTINUE_LOOP':
-            label = state.find_loop_start(self.value - 3)
+            label, end = state.find_loop(self.value - 3, end=False)
             self.code = "continue %s;" % label
 
         elif self.op_name == 'BREAK_LOOP':
-            self.code = "break;"
+            label, start, end = self.codefunc.block_inner(offset)
+            self.code = "break %s;" % label
+            self.nextoffs = end
         
         elif self.op_name.startswith("JUMP_") or self.op_name.startswith("POP_JUMP_"):
-            # The difficulty here is that we don't always know whether a given JUMP is a loop 
-            # break/continue or part of an if / elif / else.
             branch = ""
             if self.op_name.startswith("JUMP_IF_"): branch = state.peek()
             if self.op_name.startswith("POP_JUMP_IF_"): branch = state.pop()
             if self.op_name.endswith("_FALSE"): branch = "!" + branch
             if branch: branch = "if (%s) " % branch
             
-            label = state.find_loop_end(self.value)
+            # The difficulty here is that we don't always know whether a given JUMP is a loop 
+            # break/continue or part of an if / elif / else.
+            
+            label = self.codefunc.block_start(self.value-3) or self.codefunc.block_start(self.value)
             if label:
-                self.code = "%s break %s;" % (branch, label)
+                self.code = branch + "continue %s;" % label 
             else:
-                label = state.find_loop_start(self.value)
+                label = self.codefunc.block_end(self.value+2)
                 if label:
-                    self.code = "%s continue %s;" % (branch, label)
+                    self.code = branch + "break %s;" % label
                 else:
                     # XXX this is a "real" goto
-                    self.code = "XXX GOTO %s;" % label
-
+                    self.code = branch + "GOTO %s;" % self.value
+            
+            if not branch:
+                self.nextoffs = self.value
+            else:
+                self.jumpoffs = self.value
+                
         else:
             print "UNKNOWN OP %s" % self.op_name
     
     
-    
-class CodeFunc:
+class CodeFunction:
     """Represents a function or lambda, converting it to code."""
     
-    def __init__(self, code_obj):
+    blocks = []
     
+    def __init__(self, code_obj, prefix="$P"):
+    
+        self.prefix = prefix
+        
         # XXX don't forget other constant code objects, eh?
         consts = [ repr(x) for x in code_obj.co_consts ]
         
         disassy = disx.disassemble(code_obj)
         
-        self.codeops = []
+        self.codeops = [ None ] * len(code_obj.co_code)
+        
         for offset, op_code, op_name, op_args, etype, extra in disassy:
             if etype == 'const':
                 value = consts[op_args]
-            elif etype in ('name', 'global', 'local', 'free'):
-                value = repr(extra)
+            elif etype in ('name', 'local', 'global', 'free'):
+                value = self.label(extra)
             elif etype:
                 value = extra
             else:
                 value = op_args
             
-            self.codeops.append(CodeOp(self, op_name, value))
-        
-        cursors = [ (0, State()) ]
-        for offset, state in cursors:
-            self.codeops[offset].execute(state)
+            newcodeop = CodeOp(self, offset, op_name, value)
             
+            
+            self.codeops[offset] = CodeOp(self, offset, op_name, value)
+        
+        cursors = [ (0, Stack()) ]
+        for offset, stack in cursors:
+            print ">>> %d", offset
+            curop = self.codeops[offset]
+            curop.execute(stack)
+            if curop.nextoffs and not self.codeops[curop.nextoffs].visited: cursors.append( (curop.nextoffs, stack) )
+            if curop.jumpoffs and not self.codeops[curop.nextoffs].visited: cursors.append( (curop.jumpoffs, Stack(stack)) )
+            
+    def jscode(self):
+        for codeop in self.codeops:
+            if codeop: yield "/* %6d %-20s */ %s" % (codeop.offset, "%s %s" % (codeop.op_name, codeop.value), codeop.code if codeop.code else "")
+            
+    def label(self, name):
+        return "%s%s" % (self.prefix, name)
+
+    _templabel_count = 0
+    def templabel(self):
+        self._templabel_count += 1
+        return "%s%d" % (self.prefix, self._templabel_count)
+    
+    def block_add(self, start, end):
+        label = self.templabel()
+        self.blocks.insert(0, [label, start, end])
+        return label
+    
+    def block_mod(self, start=None, end=None):
+        self.codeops[self.blocks[0][1]] = ""
+        if start is not None: self.blocks[0][1] = start
+        if end is not None: self.blocks[0][2] = end
+        return self.blocks[0][0]
+        
+    def block_inner(self, offset):
+        for block in self.blocks:
+            if block[1] <= offset <= block[2]:
+                return block
+        return (None, None, None)
+    
+    def block_start(self, offset):
+        for block in self.blocks:
+            if block[1] == offset: return block[0]
+        return None
+    
+    def block_end(self, offset):
+        for block in self.blocks:
+            if block[2] == offset: return block[0]
+        return None
+    
+    def block_either(self, offset):
+        for block in self.blocks:
+            if block[1] == offset or block[2] == offset: return block[0]
+        return None
         
 # XXX Okay, so I think what will work is: 
 # * Start off with empty stack @ instruction 0
@@ -335,15 +425,17 @@ class CodeFunc:
     
 
 def f(x):
-    if y > 0:
-        print "yay!"
-    if x > 0: 
-        a = x + 1
-    elif x < 0:
-        a = x - 1
-    else:
-        a = "FUCK!"
-    return a
+    for a in [1,2,3,4,5]:
+        print a
+        
+def g(x):
+    i = 0
+    while i < 5:
+        print i
+        i += 1
 
-pprint.pprint(disx.dis(f))
-CodeFunc(f.func_code)
+ff = CodeFunction(f.func_code)
+print "\n".join(ff.jscode())
+
+gg = CodeFunction(g.func_code)
+print "\n".join(gg.jscode())

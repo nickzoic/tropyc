@@ -7,5 +7,5 @@
 proj.file-list = [loc('disx.py'),
                   loc('doc/blog.txt'),
                   loc('test_cases.py'),
-                  loc('transform.py')]
+                  loc('tropyc.py')]
 proj.file-type = 'shared'
