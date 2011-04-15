@@ -50,6 +50,8 @@ class State:
     def is_empty(self):
         return len(self.stack) == 0
             
+        
+    
 # This list is from
 # * https://developer.mozilla.org/en/JavaScript/Reference/Reserved_Words
 # * http://docstore.mik.ua/orelly/webprog/jscript/ch02_08.htm
@@ -163,19 +165,15 @@ class CodeOp:
     def execute(self, state):
         """Run this op, mutating state in the process."""
         
-        # NOPs
+        # XXX There are much nicer ways to structure this than a giant "elif"
         
-        if self.op_name == 'NOP':
-            pass
-
-        # PUSH new stuff onto state
+        # PURE FUNCTIONAL STUFF
         
-        elif self.op_name in ('LOAD_CONST', 'LOAD_NAME', 'LOAD_FAST', 'LOAD_GLOBAL'): state.push(self.value)
+        if self.op_name == 'NOP': pass
+        elif self.op_name in ('LOAD_CONST', 'LOAD_NAME', 'LOAD_FAST', 'LOAD_GLOBAL'):
+            state.push(self.value)
         elif self.op_name == 'LOAD_ATTR':
             state.push("%s.%s" % (self.extra, state.pop()))
-
-        # PURE FUNCTIONAL
-        
         elif self.op_name.startswith('UNARY_'):
             operator = lc(self.op_name[self.op_name.find("_")+1:])                        
             state.push(UnaryOperatorFormats[operator].format(state.pop()))
@@ -216,18 +214,28 @@ class CodeOp:
                 state.push(m[:-1] + ",%s:%s" % (k,v) + "}")
             else:
                 raise NotImplementedError("Trying to STORE_MAP to something not a hash?")
+
         elif self.op_name == 'STORE_ATTR':
             val, obj = state.pop2()
             self.code = "%s.%s = %s" % (obj, self.value, val)
-            
+
+        elif self.op_name == 'UNPACK_SEQUENCE':
+            tos = state.pop()
+            for n in range(0, self.value):
+                # XXX Do we need to use temp values ?            
+                #temp = temp_var(n)
+                #self.code += "var %s = %s[%d];" % (temp, tos, n)
+                #state.push(temp)
+                state.push("%s[%d]" % (tos, n))
+    
         # ACTUALLY GENERATE SOME CODE!
         
-        elif self.op_name == 'PRINT_ITEM': self.code = "print(%s)" % state.pop()
-        elif self.op_name == 'PRINT_NEWLINE': self.code = "print('-----')"
-        elif self.op_name in ('DELETE_NAME', 'DELETE_FAST'): self.code = "delete %s" % self.value
-        elif self.op_name == 'RETURN_VALUE': self.code = "return %s" % state.pop()
-        elif self.op_name == 'LIST_APPEND': self.code = "%s.push(%s)" % state.pop2()
-        elif self.op_name == 'DELETE_ATTR': self.code = "delete %s.%s" % (self.value, state.pop())
+        elif self.op_name == 'PRINT_ITEM': self.code = "print(%s);" % state.pop()
+        elif self.op_name == 'PRINT_NEWLINE': self.code = "print('-----');"
+        elif self.op_name in ('DELETE_NAME', 'DELETE_FAST'): self.code = "delete %s;" % self.value
+        elif self.op_name == 'RETURN_VALUE': self.code = "return %s;" % state.pop()
+        elif self.op_name == 'LIST_APPEND': self.code = "%s.push(%s);" % state.pop2()
+        elif self.op_name == 'DELETE_ATTR': self.code = "delete %s.%s;" % (self.value, state.pop())
         
         elif self.op_name == 'CALL_FUNCTION':
             # XXX we don't handle kwargs yet
@@ -241,30 +249,49 @@ class CodeOp:
             # XXX it would be nice to optimize away void functions (followed by POP_TOP).
             # XXX or functions immediately followed by a STORE.
             temp = temp_var()
-            self.code = "var %s = %s(%s)" % (temp, func, ",".join(args))
+            self.code = "var %s = %s(%s);" % (temp, func, ",".join(args))
             state.push(temp)
         
-        elif self.op_name == 'UNPACK_SEQUENCE':
-            tos = state.pop()
-            for n in range(0, self.value):
-                # XXX Do we need to use temp values ?            
-                #temp = temp_var(n)
-                #self.code += "var %s = %s[%d]" % (temp, tos, n)
-                #state.push(temp)
-                state.push("%s[%d]" % (tos, n))
-        
-        elif self.op_name in ('JUMP_FORWARD', 'JUMP_ABSOLUTE'):
-            self.code = "goto %s" % self.value
-        
-        elif self.op_name == 'JUMP_IF_TRUE': self.code = "if (%s) goto %s" % (state.peek(), self.value)
-        elif self.op_name == 'POP_JUMP_IF_TRUE': self.code = "if (%s) goto %s" % (state.pop(), self.value)
-        elif self.op_name == 'JUMP_IF_FALSE': self.code = "if (!%s) goto %s" % (state.peek(), self.value)
-        elif self.op_name == 'POP_JUMP_IF_FALSE': self.code = "if (!%s) goto %s" % (state.pop(), self.value)
-            
         elif self.op_name == 'RAISE_VARARGS':
             ll = state.popn(self.value)
-            self.code = "raise (%s)" % ",".join(ll)
+            self.code = "raise (%s);" % ",".join(ll)
+        
+        # LOOPING AND BRANCHING
+        
+        elif self.op_name == 'SETUP_LOOP':
+            label = state.label_loop(self.value)
+            self.code = "%s: while(1) {"
+        
+        elif self.op_name == 'POP_BLOCK':
+            self.code = "break; }"
             
+        elif self.op_name == 'CONTINUE_LOOP':
+            label = state.find_loop_start(self.value - 3)
+            self.code = "continue %s;" % label
+
+        elif self.op_name == 'BREAK_LOOP':
+            self.code = "break;"
+        
+        elif self.op_name.startswith("JUMP_") or self.op_name.startswith("POP_JUMP_"):
+            # The difficulty here is that we don't always know whether a given JUMP is a loop 
+            # break/continue or part of an if / elif / else.
+            branch = ""
+            if self.op_name.startswith("JUMP_IF_"): branch = state.peek()
+            if self.op_name.startswith("POP_JUMP_IF_"): branch = state.pop()
+            if self.op_name.endswith("_FALSE"): branch = "!" + branch
+            if branch: branch = "if (%s) " % branch
+            
+            label = state.find_loop_end(self.value)
+            if label:
+                self.code = "%s break %s;" % (branch, label)
+            else:
+                label = state.find_loop_start(self.value)
+                if label:
+                    self.code = "%s continue %s;" % (branch, label)
+                else:
+                    # XXX this is a "real" goto
+                    self.code = "XXX GOTO %s;" % label
+
         else:
             print "UNKNOWN OP %s" % self.op_name
     
@@ -293,8 +320,11 @@ class CodeFunc:
             
             self.codeops.append(CodeOp(self, op_name, value))
         
-        stack = Stack()
-    
+        cursors = [ (0, State()) ]
+        for offset, state in cursors:
+            self.codeops[offset].execute(state)
+            
+        
 # XXX Okay, so I think what will work is: 
 # * Start off with empty stack @ instruction 0
 # * Step along following default jumps (but recording side branches) until 
