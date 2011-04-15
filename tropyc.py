@@ -306,8 +306,7 @@ class CodeOp:
             branch = ""
             if self.op_name.startswith("JUMP_IF_"): branch = state.peek()
             if self.op_name.startswith("POP_JUMP_IF_"): branch = state.pop()
-            if self.op_name.endswith("_FALSE"): branch = "!" + branch
-            if branch: branch = "if (%s) " % branch
+            if self.op_name.endswith("_TRUE"): branch = "!" + branch
             
             # The difficulty here is that we don't always know whether a given JUMP is a loop 
             # break/continue or part of an if / elif / else.
@@ -317,16 +316,19 @@ class CodeOp:
             
             label = self.codefunc.block_start(self.value-3) or self.codefunc.block_start(self.value)
             if label:
-                self.code += branch + "continue %s;" % label 
+                if branch: self.code += "if (!%s) continue %s" % (branch, label)
+                else: self.code += "continue %s;" % label 
             else:
                 label = self.codefunc.block_end(self.value+2) or self.codefunc.block_end(self.value+1)
                 if label:
-                    self.code += branch + "break %s;" % label
+                    if branch: self.code += "if (!%s) break %s;" % (branch, label)
+                    else: self.code += "break %s;" % label
                 else:
                     if branch:
-                        self.code += branch + " {"
+                        self.code += "if (%s) {" % branch
+                        self.codefunc.codeops[self.value].code = "} " + self.codefunc.codeops[self.value].code
                     else:
-                        self.code += "} else {"
+                        self.code += "else {"
                         self.codefunc.codeops[self.value].code = "} " + self.codefunc.codeops[self.value].code
             
             if not branch:

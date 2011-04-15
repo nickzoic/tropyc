@@ -28,7 +28,7 @@ def test(func, args):
 
     label = func.__name__ + (": " + func.__doc__ if func.__doc__ else "")
     status = "PASS" if str(answer).strip() == str(result).strip() else "FAIL"
-    print "%-40s %s" % (label, status)
+    print "%-40s %s %s" % (label, tempname, status)
     
 def a():
     """Simplest Possible Test!"""
