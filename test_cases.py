@@ -5,6 +5,7 @@ import tempfile
 import os
 import tropyc
 import pprint
+import dis
 
 def test(func, *argslist):
     
@@ -36,7 +37,7 @@ def test(func, *argslist):
         pprint.pprint(results)
         for jsline in xfunc.jscode():
             print jsline
-        
+        dis.dis(func)
     
 def a():
     """Simplest Possible Test!"""

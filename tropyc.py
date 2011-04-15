@@ -134,11 +134,11 @@ class CodeOp:
         elif self.op_name.startswith('UNARY_'):
             operator = lc(self.op_name[self.op_name.find("_")+1:])                        
             state.push(UnaryOperatorFormats[operator].format(state.pop()))
-            
+        
         elif self.op_name.startswith('BINARY_') or self.op_name.startswith('INPLACE_'):
             operator = self.op_name[self.op_name.find("_")+1:].lower()
             state.push(BinaryOperatorFormats[operator].format(*state.pop2()))
-            
+        
         elif self.op_name == 'COMPARE_OP':
             tos, tos1 = state.pop2()
             state.push(CompareOperatorFormats[self.value].format(tos, tos1))
@@ -159,7 +159,7 @@ class CodeOp:
         elif self.op_name in ('BUILD_LIST', 'BUILD_TUPLE'): 
             ll = reversed(state.popn(self.value))
             state.push("[" + ",".join(ll) + "]")
-            
+        
         elif self.op_name == 'BUILD_MAP': state.push("{}")
 
         elif self.op_name in ('STORE_NAME', 'STORE_FAST'): self.codeb = "%s = %s;" % (self.value, state.pop())
@@ -189,14 +189,19 @@ class CodeOp:
         
         elif self.op_name == 'PRINT_ITEM': self.codeb = "print(%s);" % state.pop()
         elif self.op_name == 'PRINT_NEWLINE': self.codeb = "print('-----');"
-        elif self.op_name in ('DELETE_NAME', 'DELETE_FAST'): self.codeb = "delete %s;" % self.value
         elif self.op_name == 'LIST_APPEND': self.codeb = "%s.push(%s);" % state.pop2()
+        
+        elif self.op_name in ('DELETE_NAME', 'DELETE_FAST'):
+            self.codeb = "delete %s;" % self.value
+        
         elif self.op_name == 'DELETE_ATTR': self.codeb = "delete %s.%s;" % (self.value, state.pop())
         
         elif self.op_name == 'RETURN_VALUE':
             self.codeb = "return %s;" % state.pop()
+            if not state.is_empty():
+                print ">>> RETURN_VALUE BUT STACK NOT EMPTY"
             self.nextoffs = None
-            
+        
         elif self.op_name == 'CALL_FUNCTION':
             # XXX we don't handle kwargs yet
             kwargs = state.popn(int(self.value / 256) * 2)      
@@ -224,13 +229,13 @@ class CodeOp:
             self.codea = "%s: while (1) {" % label
             self.codefunc.codeops[self.value].codea = "break %s; }" % label
             
-            
+        
         elif self.op_name == 'GET_ITER':
             iterable = state.pop()
             temp = self.codefunc.templabel()
             self.codeb = "var %s = %s;" % (temp, iterable)
             state.push(temp)
-            
+        
         elif self.op_name == 'FOR_ITER':
             # XXX BIG problem here I think, the iterator is meant to
             # be popped off the stack when the loop exits, but I've got
@@ -241,13 +246,13 @@ class CodeOp:
             label = self.codefunc.block_mod(self.offset, self.value)
             iterator = state.peek()
             temp = self.codefunc.templabel()
-            self.codeb = "%s: for (var %s in %s) {" % (label, temp, iterator)
+            self.codea = "%s: for (var %s in %s) {" % (label, temp, iterator)
             self.codefunc.codeops[self.value].codea = "break %s; }" % label
             state.push("%s[%s]" % (iterator, temp))
-            
+        
         elif self.op_name == 'POP_BLOCK':
             pass
-            
+        
         elif self.op_name == 'CONTINUE_LOOP':
             label, end = state.find_loop(self.value - 3, end=False)
             self.codeb = "continue %s;" % label
@@ -283,17 +288,19 @@ class CodeOp:
                         self.codea = "if (%s) {" % branch
                         self.codefunc.codeops[self.value].codea = "}"
                     else:
-                        self.codea += "else {"
+                        self.codea = "else {"
                         self.codefunc.codeops[self.value].codea = "}"
             
             if not branch:
                 self.nextoffs = self.value
             else:
                 self.jumpoffs = self.value
-                
+            
         else:
             print "UNKNOWN OP %s" % self.op_name
     
+    def jscode(self):
+        return "/* %4d */ %-20s %-20s" % (self.offset, self.codea, self.codeb)
     
 class CodeFunction:
     """Represents a function or lambda, converting it to code."""
@@ -341,8 +348,8 @@ class CodeFunction:
         for varname in self.varnames:
             yield "var %s;" % varname
         for codeop in self.codeops:
-            if codeop: yield "/* %6d %12s %10s */ %10s %10s" % (codeop.offset, codeop.op_name, codeop.value, codeop.codea, codeop.codeb)
-            #if codeop and codeop.code: yield "\t" + codeop.code
+            if codeop:
+                yield codeop.jscode()
         yield "}"
     
     _templabel_count = 0
@@ -365,8 +372,8 @@ class CodeFunction:
     def block_mod(self, start=None, end=None):
         if not self.blocks:
             return self.block_add(start, end)
-        self.codeops[self.blocks[0][1]].codea = "/* %s */" % self.codeops[self.blocks[0][1]].codea
-        self.codeops[self.blocks[0][2]].codea = "/* %s */" % self.codeops[self.blocks[0][2]].codea
+        self.codeops[self.blocks[0][1]].codea = "/* %s */" % self.blocks[0][0]
+        self.codeops[self.blocks[0][2]].codea = "/* %s */" % self.blocks[0][0]
                 
         if start is not None: self.blocks[0][1] = start
         if end is not None: self.blocks[0][2] = end
