@@ -316,7 +316,7 @@ class CodeOp:
             if label:
                 self.code = branch + "continue %s;" % label 
             else:
-                label = self.codefunc.block_end(self.value+2)
+                label = self.codefunc.block_end(self.value+2) or self.codefunc.block_end(self.value+1)
                 if label:
                     self.code = branch + "break %s;" % label
                 else:
