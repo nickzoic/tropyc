@@ -4,9 +4,11 @@
 import tempfile
 import os
 import tropyc
+import pprint
 
-def test(func, args):
-    answer = func(*args)
+def test(func, *argslist):
+    
+    answers = [ str(func(*args)) for args in argslist ]
 
     xfunc = tropyc.CodeFunction(func.func_code)
     
@@ -14,27 +16,34 @@ def test(func, args):
     
     for jsline in xfunc.jscode():
         os.write(tempfd, jsline + "\n")
-        
-    os.write(tempfd, "print(%s(%s));\n" % (xfunc.funcname, ",".join([repr(a) for a in args])))
     
-    #os.write(tempfd, 'print("%s");' % answer)
+    for args in argslist:
+        os.write(tempfd, "print(%s(%s));\n" % (xfunc.funcname, ",".join([repr(a) for a in args])))
+    
     os.close(tempfd)
     
-    rhino = os.popen("rhino -f %s" % tempname)
-    result = rhino.read()
-    rhino.close()
+    with os.popen("rhino -f %s" % tempname) as rhino_file:
+        results = [ rhino_file.readline().strip() for args in argslist ]
     
-    #os.unlink(tempname)
-
     label = func.__name__ + (": " + func.__doc__ if func.__doc__ else "")
-    status = "PASS" if str(answer).strip() == str(result).strip() else "FAIL"
-    print "%-40s %s %s" % (label, tempname, status)
+    
+    if answers == results:
+        print "%-40s PASS" % label
+        os.unlink(tempname)
+    else:
+        print "%-40s FAIL" % label
+        pprint.pprint(answers)
+        pprint.pprint(results)
+        for jsline in xfunc.jscode():
+            print jsline
+        
     
 def a():
     """Simplest Possible Test!"""
     return 1
 
 test(a,())
+
 
 def b(x,y,z):
     """Parameters and Expressions"""
@@ -54,6 +63,7 @@ def c(x):
 
 test(c,(7,))
 
+
 def d():
     """List constructor & loop"""
     a = [42,67,128,2,45,1000]
@@ -64,6 +74,7 @@ def d():
 
 test(d,())
 
+
 def e(x):
     """If / Elif / Else"""
     if x == 1:
@@ -73,9 +84,8 @@ def e(x):
     else:
         return 9
     
-test(e,(1,))
-test(e,(2,))
-test(e,(3,))
+test(e,(1,),(2,),(3,))
+
 
 def f(x):
     """Recursion!"""
@@ -85,3 +95,28 @@ def f(x):
         return 1
 
 test(f,(10,))
+
+
+def g(x):
+    """Nested Loops"""
+    t = 0
+    for i in [1,2,3,4,5,6]:
+        j = 1
+        while j < x:
+            for k in [8,9,10]:
+                t += i * j * k
+            j += 1
+    return t
+
+test(g,(12,),(2,))
+
+
+def h(x):
+    """List Comprehensions"""
+    t = 0
+    z = [ x ** y for y in [1,2,3,4]]
+    for a in z:
+        t += a
+    return t
+
+test(h,(5,))

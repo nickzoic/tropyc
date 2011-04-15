@@ -49,62 +49,6 @@ class Stack:
 
     def is_empty(self):
         return len(self.stack) == 0
-            
-        
-    
-# This list is from
-# * https://developer.mozilla.org/en/JavaScript/Reference/Reserved_Words
-# * http://docstore.mik.ua/orelly/webprog/jscript/ch02_08.htm
-# XXX are there any others needed to avoid upsetting the browser?
-# XXX or should I just mangle everything to $foo or something!
-
-ReservedWords = set('''
-    abstract arguments array boolean break byte case catch char
-    class const continue date debugger decodeuri decodeuricomponent
-    default delete do double else encodeuri enum error escape eval
-    evalerror export extends false final finally float for function
-    goto if implements import in infinity instanceof int interface
-    isfinite isnan let long math nan native new null number object
-    package parsefloat parseint private protected public rangeerror
-    referenceerror regexp return short static string super switch
-    synchronized syntaxerror this throw throws transient true try
-    typeerror typeof undefined unescape urierror var void
-    volatile while with yield
-'''.split())
-
-
-# XXX need something along these lines to restrict which JavaScript
-# globals are allowed through ... the compiler should barf on any 
-# other globals.
-
-AllowedGlobals = set('''
-    alert document false float int max min null str true window 
-'''.split())
-    
-
-def name_mangle(name):
-    """Mangle identifiers to avoid collision with JavaScript reserved words."""
-    # XXX could be a lot more neaterer
-    
-    # These "_[1]" identifiers are used in list comprehensions somehow.
-    if name.startswith("_[") and name.endswith("]"): return "_Q" + name[2:-1]
-
-    # We're reserving _[A-Z] so move anything already there out of the way. 
-    if re.match("_+[A-Z]", name): return "_" + name
-    
-    if name.lower() in ReservedWords:
-        return "_R" + name
-    
-    return name
-
-
-
-_temp_var = 0
-def temp_var():
-    """Returns a unique(ish) name for a temporary variable."""
-    # XXX there is probably a safer, saner way to do this.
-    _temp_var += 1
-    return "_T%d" % _temp_var
 
 
 
@@ -119,7 +63,7 @@ UnaryOperatorFormats = {
 }
 
 BinaryOperatorFormats = {
-    'power':        '({0}**{1})',
+    'power':        'Math.pow({0},{1})',
     'multiply':     '({0}*{1})',
     'divide':       'Math.floor({0}/{1})',
     'floor_divide': 'Math.floor({0}/{1})',
@@ -161,13 +105,14 @@ class CodeOp:
         self.op_name = op_name
         self.value = value
         
-        self.code = ""
-
+        self.codea = ""
+        self.codeb = ""
+        
         self.nextoffs = None
         self.jumpoffs = None
         
         self.visited = False
-        
+    
     def execute(self, state):
         """Run this op, mutating state in the process."""
         
@@ -175,15 +120,17 @@ class CodeOp:
         
         # PURE FUNCTIONAL STUFF
         
-        self.nextoffs = self.offset + (3 if self.value else 1)
+        self.nextoffs = self.offset + (3 if self.value is not None else 1)
         self.jumpoffs = None
         self.visited = True
         
         if self.op_name == 'NOP': pass
+
         elif self.op_name in ('LOAD_CONST', 'LOAD_NAME', 'LOAD_FAST', 'LOAD_GLOBAL'):
             state.push(self.value)
         elif self.op_name == 'LOAD_ATTR':
             state.push("%s.%s" % (self.extra, state.pop()))
+        
         elif self.op_name.startswith('UNARY_'):
             operator = lc(self.op_name[self.op_name.find("_")+1:])                        
             state.push(UnaryOperatorFormats[operator].format(state.pop()))
@@ -215,7 +162,7 @@ class CodeOp:
             
         elif self.op_name == 'BUILD_MAP': state.push("{}")
 
-        elif self.op_name in ('STORE_NAME', 'STORE_FAST'): self.code = "%s = %s;" % (self.value, state.pop())
+        elif self.op_name in ('STORE_NAME', 'STORE_FAST'): self.codeb = "%s = %s;" % (self.value, state.pop())
         elif self.op_name == 'STORE_MAP':
             k, v, m = state.popn(3)
             if m == '{}':
@@ -227,7 +174,7 @@ class CodeOp:
 
         elif self.op_name == 'STORE_ATTR':
             val, obj = state.pop2()
-            self.code = "%s.%s = %s" % (obj, self.value, val)
+            self.codeb = "%s.%s = %s" % (obj, self.value, val)
 
         elif self.op_name == 'UNPACK_SEQUENCE':
             tos = state.pop()
@@ -240,14 +187,14 @@ class CodeOp:
     
         # ACTUALLY GENERATE SOME CODE!
         
-        elif self.op_name == 'PRINT_ITEM': self.code += "print(%s);" % state.pop()
-        elif self.op_name == 'PRINT_NEWLINE': self.code += "print('-----');"
-        elif self.op_name in ('DELETE_NAME', 'DELETE_FAST'): self.code += "delete %s;" % self.value
-        elif self.op_name == 'LIST_APPEND': self.code += "%s.push(%s);" % state.pop2()
-        elif self.op_name == 'DELETE_ATTR': self.code += "delete %s.%s;" % (self.value, state.pop())
+        elif self.op_name == 'PRINT_ITEM': self.codeb = "print(%s);" % state.pop()
+        elif self.op_name == 'PRINT_NEWLINE': self.codeb = "print('-----');"
+        elif self.op_name in ('DELETE_NAME', 'DELETE_FAST'): self.codeb = "delete %s;" % self.value
+        elif self.op_name == 'LIST_APPEND': self.codeb = "%s.push(%s);" % state.pop2()
+        elif self.op_name == 'DELETE_ATTR': self.codeb = "delete %s.%s;" % (self.value, state.pop())
         
         elif self.op_name == 'RETURN_VALUE':
-            self.code += "return %s;" % state.pop()
+            self.codeb = "return %s;" % state.pop()
             self.nextoffs = None
             
         elif self.op_name == 'CALL_FUNCTION':
@@ -262,44 +209,52 @@ class CodeOp:
             # XXX it would be nice to optimize away void functions (followed by POP_TOP).
             # XXX or functions immediately followed by a STORE.
             temp = self.codefunc.templabel()
-            self.code += "var %s = %s(%s);" % (temp, func, ",".join(args))
+            self.codeb = "var %s = %s(%s);" % (temp, func, ",".join(args))
             state.push(temp)
         
         #elif self.op_name == 'RAISE_VARARGS':
         #    ll = state.popn(self.value)
-        #    self.code = "raise (%s);" % ",".join(ll)
+        #    self.codeb = "raise (%s);" % ",".join(ll)
         
         # LOOPING AND BRANCHING
         
         elif self.op_name == 'SETUP_LOOP':
             self.jumpoffs = self.value
             label = self.codefunc.block_add(self.offset, self.value)
-            self.code += "%s: while (1) {" % label
+            self.codea = "%s: while (1) {" % label
+            self.codefunc.codeops[self.value].codea = "break %s; }" % label
+            
             
         elif self.op_name == 'GET_ITER':
             iterable = state.pop()
             temp = self.codefunc.templabel()
-            self.code += "var %s = %s;" % (temp, iterable)
+            self.codeb = "var %s = %s;" % (temp, iterable)
             state.push(temp)
             
         elif self.op_name == 'FOR_ITER':
+            # XXX BIG problem here I think, the iterator is meant to
+            # be popped off the stack when the loop exits, but I've got
+            # no way to say that in the current thang ... state is always
+            # equal for "next" and "jump" options.  Operators need more
+            # control!
             self.jumpoffs = self.value
             label = self.codefunc.block_mod(self.offset, self.value)
             iterator = state.peek()
             temp = self.codefunc.templabel()
-            self.code += "%s: for (var %s in %s) {" % (label, temp, iterator)  
+            self.codeb = "%s: for (var %s in %s) {" % (label, temp, iterator)
+            self.codefunc.codeops[self.value].codea = "break %s; }" % label
             state.push("%s[%s]" % (iterator, temp))
             
         elif self.op_name == 'POP_BLOCK':
-            self.code += "break; }"
+            pass
             
         elif self.op_name == 'CONTINUE_LOOP':
             label, end = state.find_loop(self.value - 3, end=False)
-            self.code += "continue %s;" % label
+            self.codeb = "continue %s;" % label
 
         elif self.op_name == 'BREAK_LOOP':
             label, start, end = self.codefunc.block_inner(offset)
-            self.code += "break %s;" % label
+            self.codeb = "break %s;" % label
             self.nextoffs = end
         
         elif self.op_name.startswith("JUMP_") or self.op_name.startswith("POP_JUMP_"):
@@ -316,20 +271,20 @@ class CodeOp:
             
             label = self.codefunc.block_start(self.value-3) or self.codefunc.block_start(self.value)
             if label:
-                if branch: self.code += "if (!%s) continue %s" % (branch, label)
-                else: self.code += "continue %s;" % label 
+                if branch: self.codeb = "if (!%s) continue %s" % (branch, label)
+                else: self.codeb = "continue %s;" % label 
             else:
                 label = self.codefunc.block_end(self.value+2) or self.codefunc.block_end(self.value+1)
                 if label:
-                    if branch: self.code += "if (!%s) break %s;" % (branch, label)
-                    else: self.code += "break %s;" % label
+                    if branch: self.codeb = "if (!%s) break %s;" % (branch, label)
+                    else: self.codeb = "break %s;" % label
                 else:
                     if branch:
-                        self.code += "if (%s) {" % branch
-                        self.codefunc.codeops[self.value].code = "} " + self.codefunc.codeops[self.value].code
+                        self.codea = "if (%s) {" % branch
+                        self.codefunc.codeops[self.value].codea = "}"
                     else:
-                        self.code += "else {"
-                        self.codefunc.codeops[self.value].code = "} " + self.codefunc.codeops[self.value].code
+                        self.codea += "else {"
+                        self.codefunc.codeops[self.value].codea = "}"
             
             if not branch:
                 self.nextoffs = self.value
@@ -386,17 +341,21 @@ class CodeFunction:
         for varname in self.varnames:
             yield "var %s;" % varname
         for codeop in self.codeops:
-            if codeop: yield "/* %6d %-20s */ %s" % (codeop.offset, "%s %s" % (codeop.op_name, codeop.value), codeop.code if codeop.code else "")
+            if codeop: yield "/* %6d %12s %10s */ %10s %10s" % (codeop.offset, codeop.op_name, codeop.value, codeop.codea, codeop.codeb)
             #if codeop and codeop.code: yield "\t" + codeop.code
         yield "}"
     
-    def label(self, name):
-        return "%s%s" % (self.prefix, name)
-
     _templabel_count = 0
     def templabel(self):
         self._templabel_count += 1
         return "%s%d" % (self.prefix, self._templabel_count)
+    
+    def label(self, name):
+        if name.startswith("_[") and name.endswith("]"):
+            return "$P$%s" % name[2:-1]
+        else:
+            return "%s%s" % (self.prefix, name)
+
     
     def block_add(self, start, end):
         label = self.templabel()
@@ -404,7 +363,11 @@ class CodeFunction:
         return label
     
     def block_mod(self, start=None, end=None):
-        self.codeops[self.blocks[0][1]] = ""
+        if not self.blocks:
+            return self.block_add(start, end)
+        self.codeops[self.blocks[0][1]].codea = "/* %s */" % self.codeops[self.blocks[0][1]].codea
+        self.codeops[self.blocks[0][2]].codea = "/* %s */" % self.codeops[self.blocks[0][2]].codea
+                
         if start is not None: self.blocks[0][1] = start
         if end is not None: self.blocks[0][2] = end
         return self.blocks[0][0]

@@ -9,3 +9,4 @@ proj.file-list = [loc('disx.py'),
                   loc('test_cases.py'),
                   loc('tropyc.py')]
 proj.file-type = 'shared'
+proj.main-file = loc('test_cases.py')
