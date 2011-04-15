@@ -23,7 +23,7 @@ def test(func, *argslist):
     
     os.close(tempfd)
     
-    with os.popen("rhino -f %s" % tempname) as rhino_file:
+    with os.popen("rhino -f library.js -f %s" % tempname) as rhino_file:
         results = [ rhino_file.readline().strip() for args in argslist ]
     
     label = func.__name__ + (": " + func.__doc__ if func.__doc__ else "")
@@ -121,3 +121,10 @@ def h(x):
     return t
 
 test(h,(5,))
+
+
+def t1(a,b,c):
+    """Library of builtins"""
+    return min((a,b,c))
+
+test(t1,(3,7,4),(1,2,3))

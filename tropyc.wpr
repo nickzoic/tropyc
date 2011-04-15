@@ -6,6 +6,7 @@
 [project attributes]
 proj.file-list = [loc('disx.py'),
                   loc('doc/blog.txt'),
+                  loc('library.js'),
                   loc('test_cases.py'),
                   loc('tropyc.py')]
 proj.file-type = 'shared'
