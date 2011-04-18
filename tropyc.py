@@ -42,6 +42,9 @@ class State:
     def peekn(self, n):
         return self.stack[0:n]
     
+    def peekx(self, n):
+        return self.stack[n]
+    
     def rot(self, n=1):
         self.stack[0:n] = self.stack[n-1::-1]
 
@@ -141,7 +144,12 @@ class CodeOp:
             tos, tos1 = state.pop2()
             state.push(CompareOperatorFormats[self.value].format(tos, tos1))
         
-        elif self.op_name == 'POP_TOP':   state.pop()    
+        elif self.op_name == 'POP_TOP':   state.pop()
+        
+        # XXX It would be nice to know if top-of-stack was already
+        # a variable rather than a constant expression so we don't have
+        # to assign it to one to copy it!
+        
         elif self.op_name == 'DUP_TOP':
             tos = state.pop()
             temp = self.codefunc.templabel()
@@ -172,7 +180,9 @@ class CodeOp:
 
         elif self.op_name in ('BUILD_LIST', 'BUILD_TUPLE'): 
             ll = reversed(state.popn(self.value))
-            state.push("[" + ",".join(ll) + "]")
+            temp = self.codefunc.templabel()
+            self.codeb = ("var %s = [" % temp) + (",".join(x for x in ll)) + "];"
+            state.push(temp)
         
         elif self.op_name == 'BUILD_MAP': state.push("{}")
 
@@ -193,17 +203,17 @@ class CodeOp:
         elif self.op_name == 'UNPACK_SEQUENCE':
             tos = state.pop()
             for n in range(0, self.value):
-                # XXX Do we need to use temp values ?            
+                # XXX Do we need to use temp values like DUP_TOP does?            
                 #temp = temp_var(n)
                 #self.code += "var %s = %s[%d];" % (temp, tos, n)
                 #state.push(temp)
                 state.push("%s[%d]" % (tos, n))
-    
-        # ACTUALLY GENERATE SOME CODE!
-        
+            
         elif self.op_name == 'PRINT_ITEM': self.codeb = "print(%s);" % state.pop()
         elif self.op_name == 'PRINT_NEWLINE': self.codeb = "print('-----');"
-        elif self.op_name == 'LIST_APPEND': self.codeb = "%s.push(%s);" % state.pop2()
+        
+        elif self.op_name == 'LIST_APPEND':
+            self.codeb = "%s.push(%s);" % (state.peekx(self.value or 1), state.pop())
         
         elif self.op_name in ('DELETE_NAME', 'DELETE_FAST'):
             self.codeb = "delete %s;" % self.value
@@ -273,12 +283,6 @@ class CodeOp:
             state.push(temp)
         
         elif self.op_name == 'FOR_ITER':
-            # XXX BIG problem here I think, the iterator is meant to
-            # be popped off the stack when the loop exits, but I've got
-            # no way to say that in the current thang ... state is always
-            # equal for "next" and "jump" options.  Operators need more
-            # control!
-            
             self.jumpoffs = self.value
             label = self.codefunc.block_add(self.offset, self.value, is_iter=True)
             iterator = state.peek()
@@ -292,6 +296,9 @@ class CodeOp:
             return [state, endstate]
         
         elif self.op_name == 'POP_BLOCK':
+            # We don't actually need to do anything here because 
+            # block_inner searches for the appropriate block anyway.
+            # XXX doing this the obvious way would probably be more efficient.
             pass
         
         elif self.op_name == 'CONTINUE_LOOP':
@@ -314,7 +321,8 @@ class CodeOp:
             # break/continue or part of an if / elif / else.
             
             # XXX Also, differences between opcode layout in 2.6 and 2.7 ... which come down
-            # to POP_JUMP_IF_*
+            # to POP_JUMP_IF_*.  This leads to the "self.value-3" and "self.value+2" 
+            # below, neither of which I'm happy about.
             
             label = self.codefunc.block_start(self.value-3) or self.codefunc.block_start(self.value)
             if label:
