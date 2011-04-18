@@ -206,7 +206,7 @@ class CodeOp:
         elif self.op_name == 'CALL_FUNCTION':
             # XXX we don't handle kwargs yet
             kwargs = state.popn(int(self.value / 256) * 2)      
-            args = state.popn(self.value % 256)
+            args = reversed(state.popn(self.value % 256))
             func = state.pop()
             
             # Functions are always saved rather than added to 

@@ -9,8 +9,14 @@ import dis
 
 def test(func, *argslist):
     
-    answers = [ str(func(*args)) for args in argslist ]
-
+    answers = []
+    for args in argslist:
+        ans = func(*args)
+        if type(ans) in (list, tuple):
+            answers.append(",".join( [str(a) for a in ans] ))
+        else:
+            answers.append(str(ans))
+            
     xfunc = tropyc.CodeFunction(func.func_code)
     
     tempfd, tempname = tempfile.mkstemp(suffix=".js")
@@ -26,11 +32,12 @@ def test(func, *argslist):
     with os.popen("rhino -f library.js -f %s" % tempname) as rhino_file:
         results = [ rhino_file.readline().strip() for args in argslist ]
     
+    os.unlink(tempname)
+    
     label = func.__name__ + (": " + func.__doc__ if func.__doc__ else "")
     
     if answers == results:
         print "%-40s PASS" % label
-        os.unlink(tempname)
     else:
         print "%-40s FAIL" % label
         pprint.pprint(answers)
@@ -46,12 +53,24 @@ def t1():
 test(t1,())
 
 
+def t1a(a,b,c,d):
+    """Order of parameters"""
+    return b
+
+test(t1a,(1,2,3,4))
+
 def t2(x,y,z):
     """Parameters and Expressions"""
     return x * y + z
 
 test(t2,(2,3,4))
 
+
+def t2a(a,b):
+    """Some Math"""
+    return (a-b,a+b,a*b,a/b)
+
+test(t2a,(4,5),(-1,5),(0,2),(6,1))
 
 def t3(x):
     """A simple loop"""
@@ -125,9 +144,21 @@ test(t8,(5,))
 
 def t9(a,b,c):
     """Library of builtins"""
-    return min((a,b,c))
+    return (min(a,b,c), max(a,b,c))
 
 test(t9,(3,7,4),(1,2,3))
+
+def t9a(a,b):
+    """cmp builtins"""
+    return cmp(a,b)
+
+test(t9a,(4,5),(9,6),(4,4),("hello","world"))
+
+def t9b(a):
+    """sorted builtin"""
+    return sorted(a)
+
+test(t9b,([1,2,3,4,5],),([3,9,1,3,4],))
 
 def t10(a):
     """For/Else"""

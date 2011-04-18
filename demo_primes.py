@@ -21,6 +21,8 @@ def find_factor(n):
         d += 4
         
     return None
+
+
 @script_manager.add()
 def check_prime(number):
     factor = find_factor(number)

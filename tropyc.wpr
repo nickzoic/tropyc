@@ -4,7 +4,8 @@
 # Wing IDE project file                                          #
 ##################################################################
 [project attributes]
-proj.file-list = [loc('disx.py'),
+proj.file-list = [loc('demo_primes.py'),
+                  loc('disx.py'),
                   loc('doc/blog.txt'),
                   loc('library.js'),
                   loc('test_cases.py'),
