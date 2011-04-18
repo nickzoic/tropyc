@@ -272,7 +272,7 @@ class CodeOp:
             
             self.jumpoffs = self.value
             #label = self.codefunc.block_mod(self.offset, self.value)
-            label = self.codefunc.block_add(self.offset, self.value)
+            label = self.codefunc.block_add(self.offset, self.value, is_iter=True)
             iterator = state.peek()
             temp = self.codefunc.templabel()
             self.codea = "%s: for (var %s in %s) {" % (label, temp, iterator)
@@ -283,11 +283,11 @@ class CodeOp:
             pass
         
         elif self.op_name == 'CONTINUE_LOOP':
-            label, end = state.find_loop(self.value - 3, end=False)
+            label, end = state.block_start(self.value - 3)
             self.codeb = "continue %s;" % label
 
         elif self.op_name == 'BREAK_LOOP':
-            label, start, end = self.codefunc.block_inner(self.offset)
+            label, start, end = self.codefunc.block_inner(self.offset, find_iter=False)
             self.codeb = "break %s;" % label
             self.nextoffs = end
         
@@ -394,9 +394,9 @@ class CodeFunction:
             return "%s%s" % (self.prefix, name)
 
     
-    def block_add(self, start, end):
+    def block_add(self, start, end, is_iter=False):
         label = self.templabel()
-        self.blocks.insert(0, [label, start, end])
+        self.blocks.insert(0, [label, start, end, is_iter])
         return label
     
     def block_mod(self, start=None, end=None):
@@ -409,10 +409,10 @@ class CodeFunction:
         if end is not None: self.blocks[0][2] = end
         return self.blocks[0][0]
         
-    def block_inner(self, offset):
+    def block_inner(self, offset, find_iter=False):
         for block in self.blocks:
-            if block[1] <= offset <= block[2]:
-                return block
+            if block[1] <= offset <= block[2] and block[3] is False or find_iter is True:
+                return block[0:3]
         return (None, None, None)
     
     def block_start(self, offset):

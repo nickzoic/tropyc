@@ -6,6 +6,7 @@ import os
 import tropyc
 import pprint
 import dis
+import json
 
 def test(func, *argslist):
     
@@ -13,9 +14,9 @@ def test(func, *argslist):
     for args in argslist:
         ans = func(*args)
         if type(ans) in (list, tuple):
-            answers.append(",".join( [str(a) for a in ans] ))
+            answers.append(",".join( [str(a) if a is not None else 'null' for a in ans] ))
         else:
-            answers.append(str(ans))
+            answers.append(str(ans) if ans is not None else 'null')
             
     xfunc = tropyc.CodeFunction(func.func_code)
     
