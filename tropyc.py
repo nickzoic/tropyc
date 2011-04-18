@@ -277,10 +277,14 @@ class CodeOp:
             
         
         elif self.op_name == 'GET_ITER':
-            iterable = state.pop()
-            temp = self.codefunc.templabel()
-            self.codeb = "var %s = %s;" % (temp, iterable)
-            state.push(temp)
+            # XXX This should push a closure instead of just making
+            # another reference to the list.  On the other hand, I suppose
+            # it is much the same thing so maybe it should just "pass"
+            pass
+            #iterable = state.pop()
+            #temp = self.codefunc.templabel()
+            #self.codeb = "var %s = %s;" % (temp, iterable)
+            #state.push(temp)
         
         elif self.op_name == 'FOR_ITER':
             self.jumpoffs = self.value
@@ -312,6 +316,7 @@ class CodeOp:
             state.offset = end
         
         elif self.op_name.startswith("JUMP_") or self.op_name.startswith("POP_JUMP_"):
+            # XXX don't forget JUMP_IF_{TRUE|FALSE}_OR_POP
             branch = ""
             if self.op_name.startswith("JUMP_IF_"): branch = state.peek()
             if self.op_name.startswith("POP_JUMP_IF_"): branch = state.pop()
@@ -397,12 +402,6 @@ class CodeFunction:
             for newstate in newstates:
                 if not self.codeops[newstate.offset].visited: states.append(newstate)
             
-        #cursors = [ (0, Stack()) ]
-        #for offset, stack in cursors:
-        #    curop = self.codeops[offset]
-        #    curop.execute(stack)
-        #    if curop.nextoffs and not self.codeops[curop.nextoffs].visited: cursors.append( (curop.nextoffs, stack) )
-        #    if curop.jumpoffs and not self.codeops[curop.nextoffs].visited: cursors.append( (curop.jumpoffs, Stack(stack)) )
             
     def jscode(self):
         yield "function %s (%s) {" % (self.funcname, ",".join(self.params))
