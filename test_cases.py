@@ -39,21 +39,21 @@ def test(func, *argslist):
             print jsline
         dis.dis(func)
     
-def a():
+def t1():
     """Simplest Possible Test!"""
     return 1
 
-test(a,())
+test(t1,())
 
 
-def b(x,y,z):
+def t2(x,y,z):
     """Parameters and Expressions"""
     return x * y + z
 
-test(b,(2,3,4))
+test(t2,(2,3,4))
 
 
-def c(x):
+def t3(x):
     """A simple loop"""
     i = 2
     t = 1
@@ -62,10 +62,10 @@ def c(x):
         i += 1
     return t
 
-test(c,(7,))
+test(t3,(7,))
 
 
-def d():
+def t4():
     """List constructor & loop"""
     a = [42,67,128,2,45,1000]
     t = 0
@@ -73,10 +73,10 @@ def d():
         t += n
     return t
 
-test(d,())
+test(t4,())
 
 
-def e(x):
+def t5(x):
     """If / Elif / Else"""
     if x == 1:
         return 7
@@ -85,20 +85,20 @@ def e(x):
     else:
         return 9
     
-test(e,(1,),(2,),(3,))
+test(t5,(1,),(2,),(3,))
 
 
-def f(x):
+def t6(x):
     """Recursion!"""
     if x > 1:
-        return f(x-1) + f(x-2)
+        return t6(x-1) + t6(x-2)
     else:
         return 1
 
-test(f,(10,))
+test(t6,(10,))
 
 
-def g(x):
+def t7(x):
     """Nested Loops"""
     t = 0
     for i in [1,2,3,4,5,6]:
@@ -109,10 +109,10 @@ def g(x):
             j += 1
     return t
 
-test(g,(12,),(2,))
+test(t7,(12,),(2,))
 
 
-def h(x):
+def t8(x):
     """List Comprehensions"""
     t = 0
     z = [ x ** y for y in [1,2,3,4]]
@@ -120,11 +120,22 @@ def h(x):
         t += a
     return t
 
-test(h,(5,))
+test(t8,(5,))
 
 
-def t1(a,b,c):
+def t9(a,b,c):
     """Library of builtins"""
     return min((a,b,c))
 
-test(t1,(3,7,4),(1,2,3))
+test(t9,(3,7,4),(1,2,3))
+
+def t10(a):
+    """For/Else"""
+    for x in [1,2,3,4,5]:
+        if x == 3: continue
+        if x == a: break
+    else:
+        x = None
+    return x
+
+test(t10,(2,),(4,),(7,))

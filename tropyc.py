@@ -3,9 +3,8 @@
 # XXX modify this so that each instruction gets its own object and stack frame: as we go around a loop 
 # the stack frames should hopefully line up.
 
-# XXX javascript looping construct most likely is probably 
-# while(1) { if (exitcondition) break; if (loopcondition) continue; break; }
-# but I have to identify the loops somehow.
+
+
 
 import sys
 import disx
@@ -53,7 +52,9 @@ class Stack:
 
 
 # Translate Opcode names to Javascript operators.
-# XXX Sure would be nice to include precedence here.
+# XXX It would be really nice to add in a more intelligent expression generator, so we don't get such
+# a parentheses salad here, and so we're not hacking on 
+# strings all the time.
 
 UnaryOperatorFormats = {
     'positive': '(+{0})',
@@ -223,6 +224,28 @@ class CodeOp:
         
         # LOOPING AND BRANCHING
         
+        # XXX javascript looping construct most likely is probably 
+        # while(1) { if (exitcondition) break; if (loopcondition) continue; break; }
+        # but I have to identify the loops somehow.
+        
+        # XXX The current state of things is a bit kludgey: I'm going to leave it like this for now,
+        # but here's an alternative loop finder:
+        #
+        # 1. Find all backwards jumps.  These can only be implemented as continues of loops
+        # 2. For each backwards jump target, introduce the start of a loop.
+        # 3. Find the last backwards jump for each backwards jump target.  If it is a conditional,
+        #    code it as a "if (!condition) break loopname;", otherwise it needs no code (and the loop will continue)
+        # 4. All other backwards jumps become "if (condition) continue loopname;".
+        # 5. Find all forwards jumps that go out of the loop.  If they are right at the start of the loop, they can
+        #    become the "while" condition.  Otherwise they are "if (condition) break loopname;".
+        # 6. Any gap between the last conditional continue and the target of the breaks must be a for/else clause.
+        #    this isn't part of Javascript but can be modelled with:
+        #        loop1: do { while (loop_condition) { if (break_condition) break loop1; loop_action; } else_action; } while(0);
+        #    some things might only break loop2 though
+        # 7. All other jumps must be if/elif/else trees.  If they cross loop boundaries, vomit.
+        
+        # XXX at the moment, for/else isn't handled at all.
+        
         elif self.op_name == 'SETUP_LOOP':
             self.jumpoffs = self.value
             label = self.codefunc.block_add(self.offset, self.value)
@@ -242,8 +265,14 @@ class CodeOp:
             # no way to say that in the current thang ... state is always
             # equal for "next" and "jump" options.  Operators need more
             # control!
+            
+            # XXX Problem here is that the 'BREAK_LOOP' should be breaking the
+            # outer "SETUP_LOOP" loop, not the inner "FOR_ITER" one which isn't
+            # really a loop.
+            
             self.jumpoffs = self.value
-            label = self.codefunc.block_mod(self.offset, self.value)
+            #label = self.codefunc.block_mod(self.offset, self.value)
+            label = self.codefunc.block_add(self.offset, self.value)
             iterator = state.peek()
             temp = self.codefunc.templabel()
             self.codea = "%s: for (var %s in %s) {" % (label, temp, iterator)
@@ -258,7 +287,7 @@ class CodeOp:
             self.codeb = "continue %s;" % label
 
         elif self.op_name == 'BREAK_LOOP':
-            label, start, end = self.codefunc.block_inner(offset)
+            label, start, end = self.codefunc.block_inner(self.offset)
             self.codeb = "break %s;" % label
             self.nextoffs = end
         
@@ -301,6 +330,7 @@ class CodeOp:
     
     def jscode(self):
         return "/* %4d */ %-20s %-20s" % (self.offset, self.codea, self.codeb)
+
     
 class CodeFunction:
     """Represents a function or lambda, converting it to code."""
@@ -315,7 +345,7 @@ class CodeFunction:
         self.varnames = [ self.label(x) for x in code_obj.co_varnames[code_obj.co_argcount:] ]
         
         # XXX don't forget other constant code objects, eh?
-        consts = [ repr(x) for x in code_obj.co_consts ]
+        consts = [ repr(x) if x is not None else 'null' for x in code_obj.co_consts ]
         
         disassy = disx.disassemble(code_obj)
         
