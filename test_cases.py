@@ -17,35 +17,42 @@ def test(func, *argslist):
             answers.append(",".join( [str(a) if a is not None else 'null' for a in ans] ))
         else:
             answers.append(str(ans) if ans is not None else 'null')
-            
-    xfunc = tropyc.CodeFunction(func.func_code)
-    
-    tempfd, tempname = tempfile.mkstemp(suffix=".js")
-    
-    for jsline in xfunc.jscode():
-        os.write(tempfd, jsline + "\n")
-    
-    for args in argslist:
-        os.write(tempfd, "print(%s(%s));\n" % (xfunc.funcname, ",".join([repr(a) for a in args])))
-    
-    os.close(tempfd)
-    
-    with os.popen("rhino -f library.js -f %s" % tempname) as rhino_file:
-        results = [ rhino_file.readline().strip() for args in argslist ]
-    
-    os.unlink(tempname)
     
     label = func.__name__ + (": " + func.__doc__ if func.__doc__ else "")
     
-    if answers == results:
-        print "%-40s PASS" % label
-    else:
-        print "%-40s FAIL" % label
-        pprint.pprint(answers)
-        pprint.pprint(results)
+    try:
+        xfunc = tropyc.CodeFunction(func.func_code)
+    
+        tempfd, tempname = tempfile.mkstemp(suffix=".js")
+    
         for jsline in xfunc.jscode():
-            print jsline
-        dis.dis(func)
+            os.write(tempfd, jsline + "\n")
+    
+        for args in argslist:
+            os.write(tempfd, "print(%s(%s));\n" % (xfunc.funcname, ",".join([repr(a) for a in args])))
+    
+        os.close(tempfd)
+    
+        with os.popen("rhino -f library.js -f %s" % tempname) as rhino_file:
+            results = [ rhino_file.readline().strip() for args in argslist ]
+    
+        os.unlink(tempname)
+    
+    
+        if answers == results:
+            print "%-40s PASS" % label
+            return
+        else:
+            print "%-40s FAIL" % label
+            pprint.pprint(answers)
+            pprint.pprint(results)
+            for jsline in xfunc.jscode():
+                print jsline
+    except Exception, e:
+        print "%-40s EXCEPTION %s" % (label, e)
+        
+    
+    dis.dis(func)
     
 def t1():
     """Simplest Possible Test!"""

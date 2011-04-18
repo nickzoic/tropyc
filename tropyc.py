@@ -11,11 +11,13 @@ import disx
 import pprint
 import re
 
-class Stack:
-    """Holds the expression stack of the virtual machine as the CodeOps 
-    execute on it.  Provides simple stack operations"""
+class State:
+    """Holds the state of the virtual machine at a given instant,
+    which is the instruction pointer and the expression stack.
+    Provides simple stack operations used by the OpCodes."""
     
-    def __init__(self, copyfrom=None):
+    def __init__(self, copyfrom=None, offset=None):
+        self.offset = offset if offset is not None else copyfrom.offset if copyfrom else 0
         self.stack = copyfrom.stack[:] if copyfrom else []
 
     def push(self, arg):
@@ -109,20 +111,15 @@ class CodeOp:
         self.codea = ""
         self.codeb = ""
         
-        self.nextoffs = None
-        self.jumpoffs = None
-        
         self.visited = False
     
-    def execute(self, state):
-        """Run this op, mutating state in the process."""
+    def execute(self, oldstate):
+        """Run this op, making up some new states."""
         
-        # XXX There are much nicer ways to structure this than a giant "elif"
+        state = State(oldstate, self.offset + (3 if self.value is not None else 1))
         
         # PURE FUNCTIONAL STUFF
         
-        self.nextoffs = self.offset + (3 if self.value is not None else 1)
-        self.jumpoffs = None
         self.visited = True
         
         if self.op_name == 'NOP': pass
@@ -145,9 +142,25 @@ class CodeOp:
             state.push(CompareOperatorFormats[self.value].format(tos, tos1))
         
         elif self.op_name == 'POP_TOP':   state.pop()    
-        elif self.op_name == 'DUP_TOP':   state.dup()             # XXX check this is okay.
-        elif self.op_name == 'DUP_TOPX':  state.dup(self.value)   # XXX this too.
-        
+        elif self.op_name == 'DUP_TOP':
+            tos = state.pop()
+            temp = self.codefunc.templabel()
+            self.codeb = "var %s = %s;" % (temp, tos)
+            state.push(temp)
+            state.push(temp)
+            
+        elif self.op_name == 'DUP_TOPX':
+            tosn = state.popn(self.value)
+            temps = []
+            for val in tosn:
+                temp = self.codefunc.templabel()
+                self.codeb += "var %s = %s;" % (temp, val)
+                temps.append(temp)
+            for temp in temps:
+                self.stack.push(temp)
+            for temp in temps:
+                self.stack.push(temp)
+                
         elif self.op_name == 'ROT_TWO':   state.rot(2)
         elif self.op_name == 'ROT_THREE': state.rot(3)
         elif self.op_name == 'ROT_FOUR':  state.rot(4)
@@ -200,8 +213,8 @@ class CodeOp:
         elif self.op_name == 'RETURN_VALUE':
             self.codeb = "return %s;" % state.pop()
             if not state.is_empty():
-                print ">>> RETURN_VALUE BUT STACK NOT EMPTY"
-            self.nextoffs = None
+                raise NotImplementedError(">>> RETURN_VALUE STACK %s" % repr(state.stack))
+            return []
         
         elif self.op_name == 'CALL_FUNCTION':
             # XXX we don't handle kwargs yet
@@ -266,30 +279,30 @@ class CodeOp:
             # equal for "next" and "jump" options.  Operators need more
             # control!
             
-            # XXX Problem here is that the 'BREAK_LOOP' should be breaking the
-            # outer "SETUP_LOOP" loop, not the inner "FOR_ITER" one which isn't
-            # really a loop.
-            
             self.jumpoffs = self.value
-            #label = self.codefunc.block_mod(self.offset, self.value)
             label = self.codefunc.block_add(self.offset, self.value, is_iter=True)
             iterator = state.peek()
             temp = self.codefunc.templabel()
             self.codea = "%s: for (var %s in %s) {" % (label, temp, iterator)
             self.codefunc.codeops[self.value].codea = "break %s; }" % label
             state.push("%s[%s]" % (iterator, temp))
+            
+            endstate = State(oldstate, self.value)
+            endstate.pop()
+            return [state, endstate]
         
         elif self.op_name == 'POP_BLOCK':
             pass
         
         elif self.op_name == 'CONTINUE_LOOP':
-            label, end = state.block_start(self.value - 3)
+            label, start = state.block_start(self.value - 3)
             self.codeb = "continue %s;" % label
-
+            state.offset = start
+            
         elif self.op_name == 'BREAK_LOOP':
             label, start, end = self.codefunc.block_inner(self.offset, find_iter=False)
             self.codeb = "break %s;" % label
-            self.nextoffs = end
+            state.offset = end
         
         elif self.op_name.startswith("JUMP_") or self.op_name.startswith("POP_JUMP_"):
             branch = ""
@@ -321,12 +334,15 @@ class CodeOp:
                         self.codefunc.codeops[self.value].codea = "}"
             
             if not branch:
-                self.nextoffs = self.value
+                state.offset = self.value
             else:
-                self.jumpoffs = self.value
+                xstate = State(state, self.value)
+                return [ state, xstate ]
             
         else:
-            print "UNKNOWN OP %s" % self.op_name
+            raise NotImplementedError("UNKNOWN OP %s" % self.op_name)
+    
+        return [ state ]
     
     def jscode(self):
         return "/* %4d */ %-20s %-20s" % (self.offset, self.codea, self.codeb)
@@ -366,19 +382,25 @@ class CodeFunction:
             
             self.codeops[offset] = CodeOp(self, offset, op_name, value)
         
-        cursors = [ (0, Stack()) ]
-        for offset, stack in cursors:
-            curop = self.codeops[offset]
-            curop.execute(stack)
-            if curop.nextoffs and not self.codeops[curop.nextoffs].visited: cursors.append( (curop.nextoffs, stack) )
-            if curop.jumpoffs and not self.codeops[curop.nextoffs].visited: cursors.append( (curop.jumpoffs, Stack(stack)) )
+        states = [ State() ]
+        for state in states:
+            curop = self.codeops[state.offset]
+            newstates = curop.execute(state)
+            for newstate in newstates:
+                if not self.codeops[newstate.offset].visited: states.append(newstate)
+            
+        #cursors = [ (0, Stack()) ]
+        #for offset, stack in cursors:
+        #    curop = self.codeops[offset]
+        #    curop.execute(stack)
+        #    if curop.nextoffs and not self.codeops[curop.nextoffs].visited: cursors.append( (curop.nextoffs, stack) )
+        #    if curop.jumpoffs and not self.codeops[curop.nextoffs].visited: cursors.append( (curop.jumpoffs, Stack(stack)) )
             
     def jscode(self):
         yield "function %s (%s) {" % (self.funcname, ",".join(self.params))
-        for varname in self.varnames:
-            yield "var %s;" % varname
+        if len(self.varnames): yield ("\tvar " + ",".join(self.varnames) + ";")
         for codeop in self.codeops:
-            if codeop:
+            if codeop and (codeop.codea or codeop.codeb):
                 yield codeop.jscode()
         yield "}"
     
@@ -394,21 +416,14 @@ class CodeFunction:
             return "%s%s" % (self.prefix, name)
 
     
+    # XXX storing these as anonymous tuples is bloody awful.
+    # Should be some kind of sensible structure here.
+    
     def block_add(self, start, end, is_iter=False):
         label = self.templabel()
         self.blocks.insert(0, [label, start, end, is_iter])
         return label
     
-    def block_mod(self, start=None, end=None):
-        if not self.blocks:
-            return self.block_add(start, end)
-        self.codeops[self.blocks[0][1]].codea = "/* %s */" % self.blocks[0][0]
-        self.codeops[self.blocks[0][2]].codea = "/* %s */" % self.blocks[0][0]
-                
-        if start is not None: self.blocks[0][1] = start
-        if end is not None: self.blocks[0][2] = end
-        return self.blocks[0][0]
-        
     def block_inner(self, offset, find_iter=False):
         for block in self.blocks:
             if block[1] <= offset <= block[2] and block[3] is False or find_iter is True:
