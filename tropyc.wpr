@@ -5,10 +5,12 @@
 ##################################################################
 [project attributes]
 proj.file-list = [loc('demo_primes.py'),
-                  loc('disx.py'),
                   loc('doc/blog.txt'),
-                  loc('library.js'),
-                  loc('test_cases.py'),
-                  loc('tropyc.py')]
+                  loc('libjs/json2.js'),
+                  loc('libjs/library.js'),
+                  loc('test'),
+                  loc('tests/test_cases.py'),
+                  loc('tropyc/disx.py'),
+                  loc('tropyc/transformer.py'),
+                  loc('tropyc/__init__.py')]
 proj.file-type = 'shared'
-proj.main-file = loc('test_cases.py')
