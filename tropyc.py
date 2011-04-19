@@ -274,7 +274,6 @@ class CodeOp:
             label = self.codefunc.block_add(self.offset, self.value)
             self.codea = "%s: while (1) {" % label
             self.codefunc.codeops[self.value].codea = "break %s; }" % label
-            
         
         elif self.op_name == 'GET_ITER':
             # XXX This should push a closure instead of just making
@@ -357,8 +356,11 @@ class CodeOp:
     
         return [ state ]
     
-    def jscode(self):
-        return "/* %4d */ %-20s %-20s" % (self.offset, self.codea, self.codeb)
+    def jscode(self, debug=False):
+        if debug:
+            return "/* %4d */ %-30s %-30s" % ( self.offset, self.codea, self.codeb)
+        else:
+            return self.codea + self.codeb
 
     
 class CodeFunction:
