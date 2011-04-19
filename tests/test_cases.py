@@ -23,7 +23,7 @@ def test(func, *argslist):
         os.write(tempfd, "\nprint(JSON.stringify([%s]));\n" % callfunc)
         os.close(tempfd)
     
-        rhino_file = os.popen("rhino -f json2.js -f library.js -f %s" % tempname)
+        rhino_file = os.popen("rhino -f libjs/json2.js -f libjs/library.js -f %s" % tempname)
         results = json.load(rhino_file)
         rhino_file.close()
         

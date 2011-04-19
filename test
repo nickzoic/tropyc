@@ -1,9 +1,11 @@
 #!/bin/bash
 
+export PYTHONPATH=${0%/*}
+
 for python in /usr/bin/python2*; do
     echo "USING $python"
     echo ""
-    $python ./test_cases.py
+    $python tests/test_cases.py
     echo ""
     echo ""
 done
