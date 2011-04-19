@@ -56,7 +56,7 @@ not all validation steps are.  Write that funtction once!
     @runs_on_both
     def validate_number(n):
         return n % 13 != 0
-        
+    
     @runs_on_the_client
     def submit_form(form):
         if validate_number(form.number):

@@ -376,7 +376,7 @@ class CodeFunction:
         self.varnames = [ self.label(x) for x in code_obj.co_varnames[code_obj.co_argcount:] ]
         
         # XXX don't forget other constant code objects, eh?
-        consts = [ repr(x) if x is not None else 'null' for x in code_obj.co_consts ]
+        self.consts = [ repr(x) if x is not None else 'null' for x in code_obj.co_consts ]
         
         disassy = disx.disassemble(code_obj)
         
@@ -384,7 +384,7 @@ class CodeFunction:
         
         for offset, op_code, op_name, op_args, etype, extra in disassy:
             if etype == 'const':
-                value = consts[op_args]
+                value = self.consts[op_args]
             elif etype in ('name', 'local', 'global', 'free'):
                 value = self.label(extra)
             elif etype:
@@ -407,7 +407,9 @@ class CodeFunction:
             
     def jscode(self, debug=False):
         yield "function %s (%s) {" % (self.funcname, ",".join(self.params))
-        if len(self.varnames): yield ("var " + ",".join(self.varnames) + ";")
+        if debug and self.consts[0] is not None:
+            yield "/* %s */" % self.consts[0]
+        if self.varnames: yield ("var " + ",".join(self.varnames) + ";")
         for codeop in self.codeops:
             if codeop and (debug or codeop.codea or codeop.codeb):
                 yield codeop.jscode(debug=debug)

@@ -1,6 +1,8 @@
 import tropyc
+import nontemplate
+import webob
 
-http_server = tropyc.HttpServer(localhost, 8000)
+http_server = tropyc.HttpServer("pluto", 8000)
 script_manager = tropyc.ScriptManager(http_server)
 
 prime_names = { 2: "The Even Prime", 13: "The Baker's Dozen", 23: "Illuminatus!" }
@@ -27,7 +29,7 @@ def find_factor(n):
 def check_prime(number):
     factor = find_factor(number)
     if factor is not None:
-        alert("%d is divisible by %d" % (number, factor) )
+        alert(number + " is divisible by " + factor )
         return True
     return False
 
@@ -40,19 +42,25 @@ def submit_prime(name, number):
         prime_names[number] = name
     
 @http_server.url('/')
-def show_primes():
-    D = nontemplate.document()
+def show_primes(request):
+    D = nontemplate.Document()
     
-    with D.html:
-        with D.head:
-            D.script(url=script_manager.url)
-        with D.body:
+    with D.html():
+        with D.head():
+            D.script(_type="text/javascript", src=script_manager.url)("")
+        with D.body():
             with D.table():
                 with D.tbody():
                     for prime in sorted(prime_names.keys()):
-                        D.tr(D.td(prime), D.td(prime_names[prime]))
+                        with D.tr():
+                            D.td()(str(prime))
+                            D.td()(prime_names[prime])
             
-            with D.form(method="post", action=submit_prime, onsubmit=check_prime):
+            with D.form(method="post", action="$Psubmit_prime", onsubmit="$Pcheck_prime"):
                 D.input(name="name")
                 D.input(name="number")
+                D.input(_type="submit")
+    
+    return webob.Response(str(D))
 
+http_server.serve()
