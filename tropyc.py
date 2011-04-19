@@ -358,7 +358,11 @@ class CodeOp:
     
     def jscode(self, debug=False):
         if debug:
-            return "/* %4d */ %-30s %-30s" % ( self.offset, self.codea, self.codeb)
+            return "/* %4d %-30s */ %s" % (
+                self.offset,
+                self.op_name + " " + ("" if self.value is None else repr(self.value)),
+                self.codea + self.codeb,
+            )
         else:
             return self.codea + self.codeb
 
@@ -405,12 +409,12 @@ class CodeFunction:
                 if not self.codeops[newstate.offset].visited: states.append(newstate)
             
             
-    def jscode(self):
+    def jscode(self, debug=False):
         yield "function %s (%s) {" % (self.funcname, ",".join(self.params))
         if len(self.varnames): yield ("\tvar " + ",".join(self.varnames) + ";")
         for codeop in self.codeops:
-            if codeop and (codeop.codea or codeop.codeb):
-                yield codeop.jscode()
+            if codeop and (debug or codeop.codea or codeop.codeb):
+                yield codeop.jscode(debug=debug)
         yield "}"
     
     _templabel_count = 0

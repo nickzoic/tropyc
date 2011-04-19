@@ -1,5 +1,4 @@
 """Run some test cases using Rhino to execute the generated Javascript"""
-# XXX tests don't actually do anything yet!
 
 import tempfile
 import os
@@ -10,13 +9,8 @@ import json
 
 def test(func, *argslist):
     
-    answers = []
-    for args in argslist:
-        ans = func(*args)
-        if type(ans) in (list, tuple):
-            answers.append(",".join( [str(a) if a is not None else 'null' for a in ans] ))
-        else:
-            answers.append(str(ans) if ans is not None else 'null')
+    # send answers to JSON and back to get them into a standard form.
+    answers = json.loads(json.dumps([ func(*args) for args in argslist ]))
     
     label = func.__name__ + (": " + func.__doc__ if func.__doc__ else "")
     
@@ -28,14 +22,15 @@ def test(func, *argslist):
         for jsline in xfunc.jscode():
             os.write(tempfd, jsline + "\n")
     
-        for args in argslist:
-            os.write(tempfd, "print(%s(%s));\n" % (xfunc.funcname, ",".join([repr(a) for a in args])))
+        callfunc = ",".join(["%s(%s)" % (xfunc.funcname, json.dumps(args)[1:-1]) for args in argslist])
+        os.write(tempfd, "print(JSON.stringify([%s]));" % callfunc)
     
         os.close(tempfd)
     
-        with os.popen("rhino -f library.js -f %s" % tempname) as rhino_file:
-            results = [ rhino_file.readline().strip() for args in argslist ]
-    
+        rhino_file = os.popen("rhino -f json2.js -f library.js -f %s" % tempname)
+        results = json.load(rhino_file)
+        rhino_file.close()
+        
         os.unlink(tempname)
     
     
@@ -46,13 +41,11 @@ def test(func, *argslist):
             print "%-40s FAIL" % label
             pprint.pprint(answers)
             pprint.pprint(results)
-            for jsline in xfunc.jscode():
+            for jsline in xfunc.jscode(debug=True):
                 print jsline
     except Exception, e:
         print "%-40s EXCEPTION %s" % (label, e)
-        
-    
-    dis.dis(func)
+        dis.dis(func)
     
 def t1():
     """Simplest Possible Test!"""
@@ -67,11 +60,11 @@ def t1a(a,b,c,d):
 
 test(t1a,(1,2,3,4))
 
-def t2(x,y,z):
+def t2(v,w,x,y,z):
     """Parameters and Expressions"""
-    return x * y + z
+    return (v + w) * x + y * z
 
-test(t2,(2,3,4))
+test(t2,(2,3,4,5,6))
 
 
 def t2a(a,b):
