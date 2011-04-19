@@ -15,16 +15,12 @@ def test(func, *argslist):
     label = func.__name__ + (": " + func.__doc__ if func.__doc__ else "")
     
     try:
-        xfunc = tropyc.CodeFunction(func.func_code)
+        jscode = tropyc.transform_js(func, debug=True)
     
-        tempfd, tempname = tempfile.mkstemp(suffix=".js")
-    
-        for jsline in xfunc.jscode():
-            os.write(tempfd, jsline + "\n")
-    
-        callfunc = ",".join(["%s(%s)" % (xfunc.funcname, json.dumps(args)[1:-1]) for args in argslist])
-        os.write(tempfd, "print(JSON.stringify([%s]));" % callfunc)
-    
+        tempfd, tempname = tempfile.mkstemp(prefix="tropyc", suffix=".js")
+        os.write(tempfd, jscode);
+        callfunc = ",".join(["$P%s(%s)" % (func.__name__, json.dumps(args)[1:-1]) for args in argslist])
+        os.write(tempfd, "\nprint(JSON.stringify([%s]));\n" % callfunc)
         os.close(tempfd)
     
         rhino_file = os.popen("rhino -f json2.js -f library.js -f %s" % tempname)
@@ -33,7 +29,6 @@ def test(func, *argslist):
         
         os.unlink(tempname)
     
-    
         if answers == results:
             print "%-40s PASS" % label
             return
@@ -41,8 +36,7 @@ def test(func, *argslist):
             print "%-40s FAIL" % label
             pprint.pprint(answers)
             pprint.pprint(results)
-            for jsline in xfunc.jscode(debug=True):
-                print jsline
+            print jscode
     except Exception, e:
         print "%-40s EXCEPTION %s" % (label, e)
         dis.dis(func)

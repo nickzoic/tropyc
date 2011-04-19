@@ -1,7 +1,7 @@
 import tropyc
 
-http_server = tropyc.http_server(localhost, 8000)
-script_manager = tropyc.script_manager(http_server)
+http_server = tropyc.HttpServer(localhost, 8000)
+script_manager = tropyc.ScriptManager(http_server)
 
 prime_names = { 2: "The Even Prime", 13: "The Baker's Dozen", 23: "Illuminatus!" }
 

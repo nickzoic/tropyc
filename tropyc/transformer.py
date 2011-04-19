@@ -1,10 +1,6 @@
-"""TROPYC: TRansform Objects from PYthon Code (into JavaScript)."""
 
 # XXX modify this so that each instruction gets its own object and stack frame: as we go around a loop 
 # the stack frames should hopefully line up.
-
-
-
 
 import sys
 import disx
@@ -411,7 +407,7 @@ class CodeFunction:
             
     def jscode(self, debug=False):
         yield "function %s (%s) {" % (self.funcname, ",".join(self.params))
-        if len(self.varnames): yield ("\tvar " + ",".join(self.varnames) + ";")
+        if len(self.varnames): yield ("var " + ",".join(self.varnames) + ";")
         for codeop in self.codeops:
             if codeop and (debug or codeop.codea or codeop.codeb):
                 yield codeop.jscode(debug=debug)
@@ -458,3 +454,6 @@ class CodeFunction:
             if block[1] == offset or block[2] == offset: return block[0]
         return None
         
+def transform_js(func, debug=False):
+    codefunc = CodeFunction(func.func_code)
+    return "\n".join(codefunc.jscode(debug=debug)) 
