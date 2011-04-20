@@ -7,6 +7,10 @@ import disx
 import pprint
 import re
 
+# XXX What would be nice is instead of keeping a stack of string expressions,
+# which is bit clumsy, we could keep a stack of objects thus getting some 
+# type information along for the ride.   This would also help with precedence.
+
 class State:
     """Holds the state of the virtual machine at a given instant,
     which is the instruction pointer and the expression stack.
@@ -53,9 +57,12 @@ class State:
 
 
 # Translate Opcode names to Javascript operators.
-# XXX It would be really nice to add in a more intelligent expression generator, so we don't get such
+# XXX It would be really nice to add in a more intelligent
+# expression generator, so we don't get such
 # a parentheses salad here, and so we're not hacking on 
-# strings all the time.
+# strings all the time.  Also, typing could allow us to tell
+# the difference between string format and modulo eg:
+# `"foo%sbar" % 7` and `127 % 7` at least some of the time.
 
 UnaryOperatorFormats = {
     'positive': '(+{0})',
@@ -63,6 +70,11 @@ UnaryOperatorFormats = {
     'not':      '(!{0})',
     'convert':  'repr({0})',  # XXX not actually supported (yet)
 }
+
+# XXX BINARY_MODULO is also used for string formatting,
+# so we're going to have to turn that into a function call.
+# although it might also be possible to keep track of types 
+# in the expression stack and avoid this somethings.
 
 BinaryOperatorFormats = {
     'power':        'Math.pow({0},{1})',
@@ -107,6 +119,9 @@ class CodeOp:
         self.op_name = op_name
         self.value = value
         
+        # XXX codea is used for loop instructions, codeb for normal ones.
+        # this is a bit of an artefact of the way code is generated and 
+        # should be cleaned up.
         self.codea = ""
         self.codeb = ""
         
@@ -147,13 +162,19 @@ class CodeOp:
         # to assign it to one to copy it!
         
         elif self.op_name == 'DUP_TOP':
-            tos = state.pop()
-            temp = self.codefunc.templabel()
-            self.codeb = "var %s = %s;" % (temp, tos)
-            state.push(temp)
-            state.push(temp)
+            top = state.peek()
+            if top.startswith(self.codefunc.prefix):
+                # This is a variable already, don't reassign it.
+                state.push(top)
+            else:
+                tos = state.pop()
+                temp = self.codefunc.templabel()
+                self.codeb = "var %s = %s;" % (temp, tos)
+                state.push(temp)
+                state.push(temp)
             
         elif self.op_name == 'DUP_TOPX':
+            # This probably needs to be optimized, it is pretty awful.
             tosn = state.popn(self.value)
             temps = []
             for val in tosn:
@@ -204,7 +225,11 @@ class CodeOp:
                 #self.code += "var %s = %s[%d];" % (temp, tos, n)
                 #state.push(temp)
                 state.push("%s[%d]" % (tos, n))
-            
+        
+        # XXX it is a really minor one, but wouldn't it be nice to 
+        # gather all the PRINT_ITEMs together into a print items buffer
+        # or something.
+        
         elif self.op_name == 'PRINT_ITEM': self.codeb = "print(%s);" % state.pop()
         elif self.op_name == 'PRINT_NEWLINE': self.codeb = "print('-----');"
         
@@ -223,7 +248,8 @@ class CodeOp:
             return []
         
         elif self.op_name == 'CALL_FUNCTION':
-            # XXX we don't handle kwargs yet
+            # XXX we don't handle kwargs yet ... need to work out how 
+            # to call kwargish functions using `options` or whatever.
             kwargs = state.popn(int(self.value / 256) * 2)      
             args = reversed(state.popn(self.value % 256))
             func = state.pop()
@@ -231,8 +257,14 @@ class CodeOp:
             # Functions are always saved rather than added to 
             # the expression state because that way we know they'll
             # actually get run right away.
-            # XXX it would be nice to optimize away void functions (followed by POP_TOP).
-            # XXX or functions immediately followed by a STORE.
+            
+            # XXX it would be nice to optimize away void functions
+            # (followed by POP_TOP) or functions immediately followed
+            # by a STORE.  This could be done by pushing a function
+            # expression onto the stack, and "freezing" that if the
+            # next instruction isn't a POP_TOP or STORE or RETURN_VALUE
+            # or PRINT_ITEM or whatever.
+            
             temp = self.codefunc.templabel()
             self.codeb = "var %s = %s(%s);" % (temp, func, ",".join(args))
             state.push(temp)
@@ -282,6 +314,9 @@ class CodeOp:
             #state.push(temp)
         
         elif self.op_name == 'FOR_ITER':
+            # We actually leave the pointless outer loop in place, just so
+            # BREAK_LOOP has somewhere to go to and we can support for/else
+            # therefore.
             self.jumpoffs = self.value
             label = self.codefunc.block_add(self.offset, self.value, is_iter=True)
             iterator = state.peek()
@@ -323,6 +358,10 @@ class CodeOp:
             # XXX Also, differences between opcode layout in 2.6 and 2.7 ... which come down
             # to POP_JUMP_IF_*.  This leads to the "self.value-3" and "self.value+2" 
             # below, neither of which I'm happy about.
+            
+            # XXX If this instruction is a JUMP_ABSOLUTE back to the top of block
+            # and the next instruction is a POP_BLOCK, we should suppress both
+            # the continue and the break at the end of the loop.
             
             label = self.codefunc.block_start(self.value-3) or self.codefunc.block_start(self.value)
             if label:
@@ -368,6 +407,9 @@ class CodeFunction:
     
     def __init__(self, code_obj, prefix="$P"):
     
+        # XXX some of the operators may need to know this to call
+        # builtins, maybe it should become a global or maybe they
+        # need to get more specialized themselves (inner classes?)
         self.prefix = prefix
         self.blocks = []
         
