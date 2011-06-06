@@ -15,3 +15,4 @@ proj.file-list = [loc('demo_primes.py'),
                   loc('tropyc/transformer.py'),
                   loc('tropyc/__init__.py')]
 proj.file-type = 'shared'
+proj.main-file = loc('demo_primes.py')

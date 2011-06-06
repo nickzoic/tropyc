@@ -2,6 +2,8 @@
 obviously.
 XXX Need to work out some way to throw a NotImplementedError in those cases
 
+XXX This can get replaced with the existing libraries from elsewhere.
+
 			  	input() 	open() 	        staticmethod()
 all()			 	 	        ord() 	        
 any() 	        eval() 	        isinstance() 	 	        sum()
@@ -100,3 +102,7 @@ function $Pzip() {
 	i++;
     }
 }
+
+$PTrue = true;
+$PFalse = false;
+$Palert = alert;
