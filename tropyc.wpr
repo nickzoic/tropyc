@@ -11,6 +11,7 @@ proj.file-list = [loc('demo_primes.py'),
                   loc('test'),
                   loc('tests/test_cases.py'),
                   loc('tropyc/disx.py'),
+                  loc('tropyc/http_server.py'),
                   loc('tropyc/transformer.py'),
                   loc('tropyc/__init__.py')]
 proj.file-type = 'shared'

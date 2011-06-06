@@ -15,6 +15,7 @@ class State:
     """Holds the state of the virtual machine at a given instant,
     which is the instruction pointer and the expression stack.
     Provides simple stack operations used by the OpCodes."""
+    # XXX self.stack should be a collections.deque (or, at least, be the other way up)
     
     def __init__(self, copyfrom=None, offset=None):
         self.offset = offset if offset is not None else copyfrom.offset if copyfrom else 0
